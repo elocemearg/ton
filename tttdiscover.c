@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-#include <getopt.h>
 #include <unistd.h>
 #include <errno.h>
 #include <error.h>
@@ -16,7 +15,9 @@
 #include <netdb.h>
 
 #include "tttutils.h"
+#include "tttnetif.h"
 #include "tttcrypt.h"
+#include "tttdiscover.h"
 
 /* Magic number of discovery datagram: "TTT1" */
 #define TTT_DISCOVER_MAGIC 0x54545431UL
@@ -27,21 +28,14 @@
 
 /* Arbitrary multicast address which the announcer multicasts to and the
  * listener subscribes to. */
-#define TTT_MULTICAST_ADDR "239.14.42.200"
+#define TTT_MULTICAST_RENDEZVOUS_ADDR "239.14.42.200"
+
+#define TTT_DEFAULT_DISCOVER_PORT 51205
 
 #define TTT_ENC_PLAIN 0 /* not permitted by default */
 #define TTT_ENC_AES_256_CBC 1
 
 #define DISCOVER_TIMESTAMP_TOLERANCE_SEC 300
-
-typedef uint16_t PORT;
-
-struct ttt_payload_raw {
-    uint32_t magic;
-    uint16_t encryption; /* 0 = no encryption, 1 = ... */
-    uint16_t payload_length;
-    char payload[256];
-};
 
 #define DISCOVER_RD_OFFSET_MAGIC 0
 #define DISCOVER_RD_OFFSET_ENC 4
@@ -89,11 +83,6 @@ struct ttt_discover_result {
     uint32_t magic;
     PORT invitation_port;
 };
-
-/* Don't need to define this on Windows */
-int closesocket(int fd) {
-    return close(fd);
-}
 
 static uint32_t
 uint32_ntoh(const char *buf, int offset) {
@@ -285,11 +274,42 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
 }
 
 int
-discover_listen(const char *listen_addr, PORT listen_port,
-        const char *multicast_rendezvous_addr, const char *secret,
-        size_t secret_length, int allow_unencrypted,
-        struct sockaddr_storage *peer_addr_r,
-        int *peer_addr_length, PORT *peer_port_r) {
+tttdlctx_init(struct tttdlctx *ctx,
+        const char *secret, size_t secret_length) {
+    memset(ctx, 0, sizeof(*ctx));
+    if (secret_length > 0) {
+        ctx->secret = malloc(secret_length);
+        if (ctx->secret == NULL)
+            goto fail;
+        memcpy(ctx->secret, secret, secret_length);
+        ctx->secret_length = secret_length;
+    }
+
+    ctx->multicast_rendezvous_addr = strdup(TTT_MULTICAST_RENDEZVOUS_ADDR);
+    ctx->allow_unencrypted = 0;
+    ctx->listen_port = TTT_DEFAULT_DISCOVER_PORT;
+    return 0;
+
+fail:
+    tttdlctx_destroy(ctx);
+    return -1;
+}
+
+void
+tttdlctx_set_port(struct tttdlctx *ctx, PORT port) {
+    ctx->listen_port = port;
+}
+
+void
+tttdlctx_destroy(struct tttdlctx *ctx) {
+    free(ctx->secret);
+    free(ctx->multicast_rendezvous_addr);
+}
+
+int
+tttdlctx_listen(struct tttdlctx *ctx,
+        struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
+        PORT *invitation_port_r) {
     int rc;
     struct addrinfo hints;
     struct addrinfo *addrinfo = NULL;
@@ -297,8 +317,6 @@ discover_listen(const char *listen_addr, PORT listen_port,
     int listener = -1;
     const int one = 1;
     int discovered = 0;
-    int attempts_made = 0;
-    int attempts_allowed = 10;
     struct sockaddr **multicast_if_addrs = NULL;
     int num_multicast_if_addrs = 0;
 
@@ -307,9 +325,9 @@ discover_listen(const char *listen_addr, PORT listen_port,
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE;
 
-    snprintf(port_str, sizeof(port_str), "%hu", listen_port);
+    snprintf(port_str, sizeof(port_str), "%hu", ctx->listen_port);
 
-    rc = getaddrinfo(listen_addr, port_str, &hints, &addrinfo);
+    rc = getaddrinfo(NULL, port_str, &hints, &addrinfo);
     if (rc != 0) {
         error(0, errno, "discover_listen: getaddrinfo");
         goto fail;
@@ -339,7 +357,7 @@ discover_listen(const char *listen_addr, PORT listen_port,
         struct sockaddr *sa = multicast_if_addrs[i];
         if (sa->sa_family == AF_INET) {
             struct ip_mreq group;
-            group.imr_multiaddr.s_addr = inet_addr(multicast_rendezvous_addr);
+            group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
             group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
             if (setsockopt(listener, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *) &group, sizeof(group)) != 0) {
                 error(0, errno, "discover_listen: setsockopt IP_ADD_MEMBERSHIP");
@@ -359,16 +377,15 @@ discover_listen(const char *listen_addr, PORT listen_port,
         else {
             struct ttt_discover_result result;
             ttt_dump_hex(datagram, rc, "received datagram");
-            if (validate_datagram(datagram, rc, secret, secret_length,
-                        allow_unencrypted, 1, &result) == 0) {
-                *peer_port_r = result.invitation_port;
+            if (validate_datagram(datagram, rc, ctx->secret, ctx->secret_length,
+                        ctx->allow_unencrypted, 1, &result) == 0) {
+                *invitation_port_r = result.invitation_port;
                 memcpy(peer_addr_r, &peer_addr, addr_len);
-                *peer_addr_length = addr_len;
+                *peer_addr_length_r = addr_len;
                 discovered = 1;
             }
         }
-        attempts_made++;
-    } while (!discovered && attempts_made < attempts_allowed);
+    } while (!discovered);
 
     if (discovered)
         rc = 0;
@@ -387,85 +404,111 @@ fail:
     goto end;
 }
 
-int
-discover_announce(PORT discover_port, const char *multicast_rendezvous_addr,
-        const char *secret, size_t secret_length, int unencrypted,
-        PORT invitation_port, int num_announcements, int announcement_gap_ms,
-        int multicast_ttl) {
-    int rc;
+static int
+make_dgram_addr_info(const char *multicast_rendezvous_addr, PORT announce_port, struct addrinfo **res) {
     struct addrinfo hints;
     char port_str[20];
-    const int one = 1;
-    char datagram[262];
-    int datagram_length;
-    struct sockaddr **broadcast_if_addrs = NULL;
-    int num_broadcast_if_addrs = 0;
-    struct sockaddr **multicast_if_addrs = NULL;
-    int num_multicast_if_addrs = 0;
-    struct addrinfo *multicast_dest_addrinfo = NULL;
-    int *sockets = NULL;
-    int num_sockets = 0;
+    int rc;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+    snprintf(port_str, sizeof(port_str), "%hu", announce_port);
+    rc = getaddrinfo(multicast_rendezvous_addr, port_str, &hints, res);
+    if (rc != 0) {
+        error(0, errno, "discover_announce: getaddrinfo multicast");
+        return -1;
+    }
+    return 0;
+}
+
+int
+tttdactx_init(struct tttdactx *ctx,
+        const char *secret, size_t secret_length) {
+    int rc;
+
+    memset(ctx, 0, sizeof(*ctx));
+
+    ctx->multicast_rendezvous_addr = strdup(TTT_MULTICAST_RENDEZVOUS_ADDR);
+    ctx->announce_port = TTT_DEFAULT_DISCOVER_PORT;
+
+    if (secret_length > 0) {
+        ctx->secret = malloc(secret_length);
+        if (ctx->secret == NULL)
+            goto fail;
+        ctx->secret_length = secret_length;
+        memcpy(ctx->secret, secret, secret_length);
+    }
 
     /* To maximise the chance of our announcement reaching our peer, we want
      * to try a broadcast packet on every interface on which we can broadcast,
      * and a multicast packet on every interface that supports multicast and
      * has a non-public IP address. */
-    broadcast_if_addrs = ttt_get_broadcast_if_addrs(&num_broadcast_if_addrs);
-    multicast_if_addrs = ttt_get_multicast_if_addrs(&num_multicast_if_addrs);
-    if (num_broadcast_if_addrs <= 0 && num_multicast_if_addrs <= 0) {
-        error(0, 0, "discover_announce: no suitable network interfaces!");
-        return -1;
+    ctx->broadcast_if_addrs = ttt_get_broadcast_if_addrs(&ctx->num_broadcast_if_addrs);
+    ctx->multicast_if_addrs = ttt_get_multicast_if_addrs(&ctx->num_multicast_if_addrs);
+    if (ctx->num_broadcast_if_addrs <= 0 && ctx->num_multicast_if_addrs <= 0) {
+        error(0, 0, "no suitable network interfaces!");
+        goto fail;
     }
 
-    if (num_broadcast_if_addrs < 0)
-        num_broadcast_if_addrs = 0;
-    if (num_multicast_if_addrs < 0)
-        num_multicast_if_addrs = 0;
+    if (ctx->num_broadcast_if_addrs < 0)
+        ctx->num_broadcast_if_addrs = 0;
+    if (ctx->num_multicast_if_addrs < 0)
+        ctx->num_multicast_if_addrs = 0;
 
-    num_sockets = num_broadcast_if_addrs + num_multicast_if_addrs;
-    sockets = malloc(sizeof(int) * num_sockets);
-    if (sockets == NULL) {
+    ctx->num_sockets = ctx->num_broadcast_if_addrs + ctx->num_multicast_if_addrs;
+    ctx->sockets = malloc(sizeof(int) * ctx->num_sockets);
+    if (ctx->sockets == NULL) {
         error(0, errno, "malloc");
         goto fail;
     }
-    for (int i = 0; i < num_sockets; i++) {
-        sockets[i] = -1;
+    for (int i = 0; i < ctx->num_sockets; i++) {
+        ctx->sockets[i] = -1;
     }
 
-    for (int i = 0; i < num_sockets; i++) {
-        struct sockaddr *sa = (i < num_broadcast_if_addrs) ? broadcast_if_addrs[i] : multicast_if_addrs[i - num_broadcast_if_addrs];
-        sockets[i] = socket(sa->sa_family, SOCK_DGRAM, 0);
-        if (sockets[i] < 0) {
+    /* sockets contains num_broadcast_if_addrs sockets to broadcast on,
+     * followed by num_multicast_if_addrs sockets to multicast on. */
+
+    for (int i = 0; i < ctx->num_sockets; i++) {
+        const int one = 1;
+        const int multicast_ttl = 1;
+        struct sockaddr *sa = (i < ctx->num_broadcast_if_addrs) ? ctx->broadcast_if_addrs[i] : ctx->multicast_if_addrs[i - ctx->num_broadcast_if_addrs];
+        ctx->sockets[i] = socket(sa->sa_family, SOCK_DGRAM, 0);
+        if (ctx->sockets[i] < 0) {
             error(0, errno, "socket");
             goto fail;
         }
-        if (i < num_broadcast_if_addrs) {
-            rc = setsockopt(sockets[i], SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+        if (i < ctx->num_broadcast_if_addrs) {
+            /* Set up this socket for broadcast, and fill in the port number
+             * of the struct sockaddr. */
+            rc = setsockopt(ctx->sockets[i], SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
             if (rc < 0) {
                 error(0, errno, "discover_announce: setsockopt SO_BROADCAST");
                 goto fail;
             }
 
             if (sa->sa_family == AF_INET) {
-                ((struct sockaddr_in *) sa)->sin_port = htons(discover_port);
+                ((struct sockaddr_in *) sa)->sin_port = htons(ctx->announce_port);
+
             }
             else if (sa->sa_family == AF_INET6) {
-                ((struct sockaddr_in6 *) sa)->sin6_port = htons(discover_port);
+                ((struct sockaddr_in6 *) sa)->sin6_port = htons(ctx->announce_port);
             }
         }
         else {
+            /* Set up this socket for multicast. */
             /* setsockopt takes only IPv4 in_addr structs, so
              * ttt_get_multicast_if_addrs() only returns IPv4 interfaces */
             struct sockaddr_in *sin;
             assert(sa->sa_family == AF_INET);
             sin = (struct sockaddr_in *) sa;
-            rc = setsockopt(sockets[i], IPPROTO_IP, IP_MULTICAST_IF, &sin->sin_addr, sizeof(sin->sin_addr));
+            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_IF, &sin->sin_addr, sizeof(sin->sin_addr));
             if (rc != 0) {
                 error(0, errno, "discover_announce: setsockopt IP_MULTICAST_IF");
                 goto fail;
             }
 
-            rc = setsockopt(sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &multicast_ttl, sizeof(multicast_ttl));
+            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &multicast_ttl, sizeof(multicast_ttl));
             if (rc != 0) {
                 error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
                 goto fail;
@@ -475,161 +518,115 @@ discover_announce(PORT discover_port, const char *multicast_rendezvous_addr,
 
     /* Get an addrinfo for our multicast rendezvous address, which we will be
      * announcing to as well as to any broadcast addresses we find. */
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_PASSIVE;
-    snprintf(port_str, sizeof(port_str), "%hu", discover_port);
-    rc = getaddrinfo(multicast_rendezvous_addr, port_str, &hints, &multicast_dest_addrinfo);
-    if (rc != 0) {
-        error(0, errno, "discover_announce: getaddrinfo multicast");
+    if (make_dgram_addr_info(ctx->multicast_rendezvous_addr, ctx->announce_port,&ctx->multicast_rendezvous_addrinfo) != 0)
+        goto fail;
+
+    return 0;
+
+fail:
+    tttdactx_destroy(ctx);
+    return -1;
+}
+
+void
+tttdactx_set_port(struct tttdactx *ctx, PORT port) {
+    struct addrinfo *addrinfo;
+
+    ctx->announce_port = port;
+
+    /* Change the port number in the broadcast address structs... */
+    for (int i = 0; i < ctx->num_broadcast_if_addrs; ++i) {
+        struct sockaddr *sa = ctx->broadcast_if_addrs[i];
+        if (sa->sa_family == AF_INET) {
+            ((struct sockaddr_in *) sa)->sin_port = htons(ctx->announce_port);
+
+        }
+        else if (sa->sa_family == AF_INET6) {
+            ((struct sockaddr_in6 *) sa)->sin6_port = htons(ctx->announce_port);
+        }
+    }
+
+    /* Change the port number in the multicast destination address... */
+    if (make_dgram_addr_info(ctx->multicast_rendezvous_addr, ctx->announce_port, &addrinfo) == 0) {
+        freeaddrinfo(ctx->multicast_rendezvous_addrinfo);
+        ctx->multicast_rendezvous_addrinfo = addrinfo;
+    }
+}
+
+void
+tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl) {
+    for (int i = ctx->num_broadcast_if_addrs; i < ctx->num_sockets; i++) {
+        int rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
+        if (rc != 0) {
+            error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
+        }
+    }
+}
+
+void
+tttdactx_destroy(struct tttdactx *ctx) {
+    free(ctx->multicast_rendezvous_addr);
+    free(ctx->secret);
+    if (ctx->sockets) {
+        for (int i = 0; i < ctx->num_sockets; i++) {
+            if (ctx->sockets[i] >= 0)
+                closesocket(ctx->sockets[i]);
+        }
+        free(ctx->sockets);
+    }
+    if (ctx->multicast_rendezvous_addrinfo != NULL) {
+        freeaddrinfo(ctx->multicast_rendezvous_addrinfo);
+    }
+    ttt_free_addrs(ctx->broadcast_if_addrs, ctx->num_broadcast_if_addrs);
+    ttt_free_addrs(ctx->multicast_if_addrs, ctx->num_multicast_if_addrs);
+}
+
+int
+tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
+    int num_sockets_failed = 0;
+    char datagram[262];
+    int datagram_length;
+
+    datagram_length = make_announce_datagram(datagram, sizeof(datagram),
+            ctx->secret, ctx->secret_length, TTT_ENC_AES_256_CBC,
+            invitation_port);
+    if (datagram_length < 0) {
+        error(0, errno, "discover_announce: failed to build datagram");
         goto fail;
     }
 
-    for (int announcement = 0; announcement < num_announcements; announcement++) {
+    for (int si = 0; si < ctx->num_sockets; si++) {
         ssize_t bytes_sent;
-
-        /* Build a new datagram for every attempt, so the timestamp doesn't
-         * get stale. */
-        datagram_length = make_announce_datagram(datagram, sizeof(datagram),
-                secret, secret_length, unencrypted ? TTT_ENC_PLAIN : TTT_ENC_AES_256_CBC, invitation_port);
-        if (datagram_length < 0) {
-            error(0, errno, "discover_announce: failed to build datagram");
-            goto fail;
-        }
-
-        if (announcement > 0) {
-            usleep(((useconds_t) announcement_gap_ms) * 1000);
-        }
-
-        for (int si = 0; si < num_sockets; si++) {
-            struct sockaddr *sa;
-            int sa_len;
-            if (si < num_broadcast_if_addrs) {
-                sa = broadcast_if_addrs[si];
-                if (sa->sa_family == AF_INET)
-                    sa_len = sizeof(struct sockaddr_in);
-                else if (sa->sa_family == AF_INET6)
-                    sa_len = sizeof(struct sockaddr_in6);
-                else
-                    continue;
-            }
-            else {
-                sa = multicast_dest_addrinfo->ai_addr;
-                sa_len = multicast_dest_addrinfo->ai_addrlen;
-            }
-
-            bytes_sent = sendto(sockets[si], datagram, datagram_length, 0, sa, sa_len);
-            if (bytes_sent < 0) {
-                error(0, errno, "discover_announce: sendto");
-            }
-            else if (bytes_sent < datagram_length) {
-                error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
-            }
-        }
-    }
-
-    rc = 0;
-end:
-    for (int i = 0; i < num_sockets; i++) {
-        if (sockets[i] >= 0)
-            closesocket(sockets[i]);
-    }
-    free(sockets);
-    if (multicast_dest_addrinfo != NULL) {
-        freeaddrinfo(multicast_dest_addrinfo);
-    }
-    ttt_free_addrs(broadcast_if_addrs, num_broadcast_if_addrs);
-    ttt_free_addrs(multicast_if_addrs, num_multicast_if_addrs);
-    return rc;
-
-fail:
-    rc = -1;
-    goto end;
-}
-
-int main(int argc, char **argv) {
-    int c;
-    int listen_mode = 0;
-    char *secret = "";
-    int discover_port = 28441;
-    PORT invitation_port = 12345;
-    int rc;
-    int exit_status = 0;
-    int multicast_ttl = 1;
-    int allow_unencrypted = 0;
-
-    while ((c = getopt(argc, argv, "ls:p:i:t:n")) != -1) {
-        switch (c) {
-            case 'l':
-                listen_mode = 1;
-                break;
-
-            case 's':
-                secret = optarg;
-                break;
-
-            case 'p':
-                discover_port = atoi(optarg);
-                break;
-
-            case 'i':
-                invitation_port = atoi(optarg);
-                break;
-
-            case 'n':
-                allow_unencrypted = 1;
-                break;
-
-            case 't':
-                multicast_ttl = atoi(optarg);
-                if (multicast_ttl < 1 || multicast_ttl > 10) {
-                    error(1, 0, "multicast TTL must be between 1 and 10");
-                }
-                break;
-
-            default:
-                exit(1);
-        }
-    }
-
-    if (listen_mode) {
-        struct sockaddr_storage peer_addr;
-        int peer_addr_len;
-        PORT peer_invitation_port;
-
-        rc = discover_listen(NULL, (PORT) discover_port, TTT_MULTICAST_ADDR,
-                secret, strlen(secret), allow_unencrypted, &peer_addr,
-                &peer_addr_len, &peer_invitation_port);
-        if (rc != 0) {
-            error(0, 0, "discover_listen failed.");
-            exit_status = 1;
+        struct sockaddr *sa;
+        int sa_len;
+        if (si < ctx->num_broadcast_if_addrs) {
+            sa = ctx->broadcast_if_addrs[si];
+            if (sa->sa_family == AF_INET)
+                sa_len = sizeof(struct sockaddr_in);
+            else if (sa->sa_family == AF_INET6)
+                sa_len = sizeof(struct sockaddr_in6);
+            else
+                continue;
         }
         else {
-            char peer_addr_str[100];
-            char peer_port_str[30];
-            rc = getnameinfo((struct sockaddr *) &peer_addr, sizeof(peer_addr),
-                    peer_addr_str, sizeof(peer_addr_str),
-                    peer_port_str, sizeof(peer_port_str),
-                    NI_NUMERICHOST | NI_NUMERICSERV);
-            if (rc != 0) {
-                error(0, 0, "getnameinfo: %s", gai_strerror(rc));
-                exit_status = 1;
-            }
-            else {
-                printf("Discovered: %s port %s, invitation port %hu\n", peer_addr_str, peer_port_str, peer_invitation_port);
-            }
+            sa = ctx->multicast_rendezvous_addrinfo->ai_addr;
+            sa_len = ctx->multicast_rendezvous_addrinfo->ai_addrlen;
         }
-    }
-    else {
-        rc = discover_announce((PORT) discover_port, TTT_MULTICAST_ADDR,
-                secret, strlen(secret), allow_unencrypted, invitation_port,
-                10, 1000, multicast_ttl);
-        if (rc != 0) {
-            error(0, 0, "discover_announce failed.");
-            exit_status = 1;
+
+        bytes_sent = sendto(ctx->sockets[si], datagram, datagram_length, 0, sa, sa_len);
+        if (bytes_sent < 0) {
+            error(0, errno, "discover_announce: sendto");
+            num_sockets_failed++;
+        }
+        else if (bytes_sent < datagram_length) {
+            error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
+            num_sockets_failed++;
         }
     }
 
-    return exit_status;
+    /* Return -1 (failure) if we failed to send on all sockets. */
+    return -(num_sockets_failed == ctx->num_sockets);
+
+fail:
+    return -1;
 }
