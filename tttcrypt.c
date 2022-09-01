@@ -9,6 +9,17 @@
 #include <error.h>
 
 int
+ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
+        const unsigned char *salt, size_t salt_len, unsigned char *key_dest,
+        size_t key_dest_size) {
+    if (PKCS5_PBKDF2_HMAC_SHA1(passphrase, passphrase_len, salt, salt_len, 1000, key_dest_size, key_dest) != 1) {
+        error(0, 0, "ttt_aes_256_cbc_encrypt: PKCS5_PBKDF2_HMAC_SHA1() failed");
+        return -1;
+    }
+    return 0;
+}
+
+int
 ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
         size_t dest_max, const char *secret, size_t secret_len) {
     EVP_CIPHER_CTX *ctx = NULL;
@@ -42,7 +53,7 @@ ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
     }
 
     /* Convert the passphrase into a 32-byte key */
-    if (PKCS5_PBKDF2_HMAC_SHA1(secret, secret_len, salt, 8, 1000, sizeof(key), key) != 1) {
+    if (ttt_passphrase_to_key(secret, secret_len, salt, 8, key, sizeof(key)) < 0) {
         goto fail;
     }
 
@@ -114,8 +125,7 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     }
 
     /* Convert our passphrase into a 32-byte key */
-    if (PKCS5_PBKDF2_HMAC_SHA1(secret, secret_len, salt, sizeof(salt), 1000, sizeof(key), key) != 1) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: PKCS5_PBKDF2_HMAC_SHA1() failed");
+    if (ttt_passphrase_to_key(secret, secret_len, salt, sizeof(salt), key, sizeof(key)) < 0) {
         goto fail;
     }
 

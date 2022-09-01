@@ -3,6 +3,8 @@
 
 #include <sys/types.h>
 
+#include <openssl/ssl.h>
+
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing
  * only, the default will be encrypted when I've deciphered the OpenSSL docs. */
 struct ttt_session {
@@ -14,6 +16,18 @@ struct ttt_session {
 
     /* The underlying socket */
     int sock;
+
+    /* Plain text handshake state, which we have to keep track of because the
+     * handshake is done on non-blocking sockets.
+     * 0 = client is sending hello, server is receiving it.
+     * 1 = server is sending hello, client is receiving it.
+     */
+    int plaintext_handshake_state;
+    char plaintext_handshake_message[10];
+    int plaintext_handshake_message_pos;
+
+    SSL *ssl;
+    SSL_CTX *ssl_ctx;
 
     /* True if this socket was born by accepting a connection from a listening
      * socket, false if it connected out to something. */
@@ -46,5 +60,8 @@ ttt_session_handshake(struct ttt_session *s);
 
 void
 ttt_session_destroy(struct ttt_session *s);
+
+int
+ttt_session_set_key(const char *passphrase, size_t passphrase_length);
 
 #endif

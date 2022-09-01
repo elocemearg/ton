@@ -9,8 +9,28 @@
 #include <errno.h>
 #include <error.h>
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include "tttsession.h"
 #include "tttutils.h"
+#include "tttcrypt.h"
+
+/* One global pre-shared key, set with ttt_session_set_key.
+ * It's a 256-bit key generated from a passphrase. */
+static unsigned char ttt_session_key[32];
+static const int ttt_session_key_length = 32;
+
+static void
+show_ssl_errors(FILE *out) {
+    unsigned long err;
+    char buf[256];
+
+    while ((err = ERR_get_error()) != 0) {
+        ERR_error_string_n(err, buf, sizeof(buf));
+        fprintf(stderr, "SSL: %s\n", buf);
+    }
+}
 
 static void
 ttt_session_plain_destroy(struct ttt_session *s) {
@@ -44,9 +64,111 @@ ttt_session_plain_make_blocking(struct ttt_session *s) {
 }
 
 static int
+handshake_receive_hello(struct ttt_session *s) {
+    const int message_length = 6;
+    const char *message = "hello\n";
+    int rc;
+
+    do {
+        rc = s->read(s, s->plaintext_handshake_message + s->plaintext_handshake_message_pos, message_length - s->plaintext_handshake_message_pos);
+        if (rc > 0) {
+            s->plaintext_handshake_message_pos += rc;
+        }
+    } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
+
+    if (rc < 0) {
+        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            s->want_read = 1;
+            return -1;
+        }
+        else {
+            error(0, errno, "handshake read");
+            s->failed = 1;
+            show_ssl_errors(stderr);
+            return -1;
+        }
+    }
+    else if (rc == 0) {
+        error(0, 0, "unexpected EOF from peer");
+        s->failed = 1;
+        return -1;
+    }
+    else {
+        if (!memcmp(s->plaintext_handshake_message, message, message_length)) {
+            s->plaintext_handshake_state++;
+            s->plaintext_handshake_message_pos = 0;
+            return 0;
+        }
+        else {
+            error(0, 0, "unexpected handshake message: %.*s", s->plaintext_handshake_message_pos, s->plaintext_handshake_message);
+            s->failed = 1;
+            return -1;
+        }
+    }
+}
+
+static int
+handshake_send_hello(struct ttt_session *s) {
+    const int message_length = 6;
+    const char *message = "hello\n";
+    int rc;
+
+    do {
+        rc = s->write(s, message + s->plaintext_handshake_message_pos, message_length - s->plaintext_handshake_message_pos);
+        if (rc > 0) {
+            s->plaintext_handshake_message_pos += rc;
+        }
+    } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
+
+    if (rc < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            s->want_write = 1;
+            return -1;
+        }
+        else {
+            error(0, errno, "handshake write");
+            s->failed = 1;
+            show_ssl_errors(stderr);
+            return -1;
+        }
+    }
+    else if (rc == 0) {
+        error(0, 0, "unexpected EOF during handshake write");
+        s->failed = 1;
+        return -1;
+    }
+    else {
+        s->plaintext_handshake_state++;
+        s->plaintext_handshake_message_pos = 0;
+        return 0;
+    }
+}
+
+static int
 ttt_session_plain_handshake(struct ttt_session *s) {
-    /* No handshake needed for plaintext connection - immediately succeed. */
-    return 0;
+    /* Simple toy handshake: client says hello, server replies hello.
+     * This works regardless of whether the socket is blocking or
+     * non-blocking. */
+    int rc = 0;
+    if (s->plaintext_handshake_state == 0) {
+        if (s->is_server) {
+            rc = handshake_receive_hello(s);
+        }
+        else {
+            rc = handshake_send_hello(s);
+        }
+    }
+    if (rc == 0) {
+        if (s->plaintext_handshake_state == 1) {
+            if (s->is_server) {
+                rc = handshake_send_hello(s);
+            }
+            else {
+                rc = handshake_receive_hello(s);
+            }
+        }
+    }
+    return rc;
 }
 
 static int
@@ -61,7 +183,9 @@ ttt_session_plain_init(struct ttt_session *s) {
 
 static void
 ttt_session_tls_destroy(struct ttt_session *s) {
-    /* GOZZARD: destroy SSL object, close socket */
+    SSL_free(s->ssl);
+    SSL_CTX_free(s->ssl_ctx);
+    closesocket(s->sock);
 }
 
 static int
@@ -69,64 +193,183 @@ ttt_session_tls_make_blocking(struct ttt_session *s) {
     int flags = fcntl(s->sock, F_GETFL, 0);
     flags &= ~O_NONBLOCK;
     fcntl(s->sock, F_SETFL, flags);
-
-    /* GOZZARD: set the BIOs for s->ssl so that they're now blocking. */
     return 0;
 }
 
 static int
 ttt_session_tls_write(struct ttt_session *s, const void *buf, size_t len) {
-    /* GOZZARD: SSL_write */
-    return -1;
+    int rc = SSL_write(s->ssl, buf, len);
+    if (rc <= 0) {
+        int ssl_err = SSL_get_error(s->ssl, rc);
+        if (ssl_err == SSL_ERROR_WANT_READ) {
+            s->want_read = 1;
+        }
+        else if (ssl_err == SSL_ERROR_WANT_WRITE) {
+            s->want_write = 1;
+        }
+        else {
+            s->failed = 1;
+        }
+        return -1;
+    }
+    else {
+        return rc;
+    }
 }
 
 static int
 ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
-    /* GOZZARD: SSL_read */
-    return -1;
+    int rc = SSL_read(s->ssl, dest, len);
+    if (rc <= 0) {
+        int ssl_err = SSL_get_error(s->ssl, rc);
+        if (ssl_err == SSL_ERROR_WANT_READ) {
+            s->want_read = 1;
+        }
+        else if (ssl_err == SSL_ERROR_WANT_WRITE) {
+            s->want_write = 1;
+        }
+        else if (ssl_err == SSL_ERROR_ZERO_RETURN) {
+            return 0;
+        }
+        else {
+            s->failed = 1;
+        }
+        return -1;
+    }
+    else {
+        return rc;
+    }
 }
 
 static int
 ttt_session_tls_handshake(struct ttt_session *s) {
-    /* GOZZARD: call SSL_do_handshake(s->ssl).
-     * Return 0 if handshake completed successfully, -1 if it failed
-     * permanently, or 1 if it failed with WANT_READ or WANT_WRITE.
+    /* Call SSL_do_handshake. If the underlying socket is blocking, this will
+     * block until the handshake succeeds (returns 1) or permanently fails
+     * (return <1).
      *
-     * References:
+     * If the underlying socket is non-blocking, it may return
+     * <1 if it can't read or write at the moment, and SSL_get_error() will
+     * indicate this. In this case we return an error but set s->want_read
+     * or s->want_write so that the caller knows to call us again when the
+     * socket can next be read from or written to, respectively.
      *
-     * https://www.openssl.org/docs/manmaster/man3/SSL_do_handshake.html
+     * If SSL_do_handshake() returns <1 for any other reason, we set
+     * s->failed and return -1.
      */
-    return -1;
+    int rc = SSL_do_handshake(s->ssl);
+    if (rc == 1) {
+        /* Success */
+        /*const SSL_CIPHER *cipher = SSL_get_current_cipher(s->ssl);
+        fprintf(stderr, "ttt_session_tls_handshake(): negotiated cipher %s\n", SSL_CIPHER_get_name(cipher));*/
+        return 0;
+    }
+    else {
+        /* Not success: determine whether this is temporary for lack of input
+         * data or output space, or something more permanent. */
+        int ssl_err = SSL_get_error(s->ssl, rc);
+        if (ssl_err == SSL_ERROR_WANT_READ) {
+            s->want_read = 1;
+            return 1;
+        }
+        else if (ssl_err == SSL_ERROR_WANT_WRITE) {
+            s->want_write = 1;
+            return 1;
+        }
+        else {
+            s->failed = 1;
+            show_ssl_errors(stderr);
+            return -1;
+        }
+    }
+}
+
+static unsigned int
+psk_client_cb(SSL *ssl, const char *hint,
+        char *identity, unsigned int max_identity_len,
+        unsigned char *psk, unsigned int max_psk_len) {
+    /* We don't use this */
+    strncpy(identity, "tttclient", max_identity_len);
+    if (max_identity_len > 0)
+        identity[max_identity_len - 1] = '\0';
+
+    if (ttt_session_key_length > max_psk_len) {
+        error(0, 0, "psk_client_cb: psk buffer not big enough!");
+        return 0;
+    }
+    memcpy(psk, ttt_session_key, ttt_session_key_length);
+    return ttt_session_key_length;
+}
+
+/*
+static void
+ssl_trace(int write_p, int version, int content_type, const void *buf, size_t len, SSL *ssl, void *arg) {
+    char context[100];
+    snprintf(context, sizeof(context), "%s %d %d", write_p ? "sent" : "received", version, content_type);
+    ttt_dump_hex(buf, len, context);
+}
+*/
+
+static unsigned int
+psk_server_cb(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len) {
+    if (ttt_session_key_length > max_psk_len) {
+        error(0, 0, "psk_server_cb: psk buffer not big enough!");
+        return 0;
+    }
+    memcpy(psk, ttt_session_key, ttt_session_key_length);
+    return ttt_session_key_length;
 }
 
 static int
 ttt_session_tls_init(struct ttt_session *s) {
+    const SSL_METHOD *method;
+
     s->destroy = ttt_session_tls_destroy;
     s->write = ttt_session_tls_write;
     s->read = ttt_session_tls_read;
     s->make_blocking = ttt_session_tls_make_blocking;
     s->handshake = ttt_session_tls_handshake;
 
-    /* GOZZARD: create an SSL object (SSL_new()?)
-     * SSL_set_fd(ssl, s->sock);
-     *
-     * [whatever PSK cipher shit needs to be set up]
-     *
-     * References (so I can remember later where to find them):
-     *
-     * https://www.openssl.org/docs/manmaster/man3/SSL_new.html
-     *
-     * https://www.openssl.org/docs/manmaster/man3/SSL_set_fd.html
-     *
-     * https://stackoverflow.com/questions/58719595/how-to-do-tls-1-3-psk-using-openssl
-     * https://github.com/openssl/openssl/blob/6af1b11848f000c900877f1289a42948d415f21c/apps/s_server.c#L185-L232
-     * https://github.com/openssl/openssl/blob/6af1b11848f000c900877f1289a42948d415f21c/apps/s_client.c#L183-L243
-     * https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_find_session_callback.html
-     * https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_use_session_callback.html
-     *
-     * https://ciphersuite.info/cs/TLS_DHE_PSK_WITH_AES_256_GCM_SHA384/
-     */
-    return -1;
+    /* Set up all the SSL rubbish, gleaned from bashing head against the
+     * OpenSSL docs for ages. */
+    if (s->is_server)
+        method = TLS_server_method();
+    else
+        method = TLS_client_method();
+
+    s->ssl_ctx = SSL_CTX_new(method);
+    if (s->ssl_ctx == NULL) {
+        error(0, 0, "SSL_CTX_new failed");
+        return -1;
+    }
+
+    /* Set callbacks to supply s->ssl with the pre-shared key when the
+     * time is right. */
+    if (s->is_server) {
+        SSL_CTX_set_psk_server_callback(s->ssl_ctx, psk_server_cb);
+    }
+    else {
+        SSL_CTX_set_psk_client_callback(s->ssl_ctx, psk_client_cb);
+    }
+
+    SSL_CTX_set_ciphersuites(s->ssl_ctx, "PSK");
+
+    /* We want SSL_write to write as much as it can before blocking or
+     * failing with WANT_WRITE. */
+    SSL_CTX_set_mode(s->ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+
+    /* Open our SSL session and give it this session's socket */
+    s->ssl = SSL_new(s->ssl_ctx);
+    SSL_set_fd(s->ssl, s->sock);
+
+    /* Set the appropriate state, ready to start the handshake */
+    if (s->is_server) {
+        SSL_set_accept_state(s->ssl);
+    }
+    else {
+        SSL_set_connect_state(s->ssl);
+    }
+
+    return 0;
 }
 
 int
@@ -206,4 +449,9 @@ ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_
 void
 ttt_session_destroy(struct ttt_session *s) {
     s->destroy(s);
+}
+
+int
+ttt_session_set_key(const char *passphrase, size_t passphrase_len) {
+    return ttt_passphrase_to_key(passphrase, passphrase_len, NULL, 0, ttt_session_key, sizeof(ttt_session_key));
 }

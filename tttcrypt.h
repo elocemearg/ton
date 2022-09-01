@@ -17,4 +17,9 @@ ttt_set_random_bytes(char *dest, size_t length);
 int
 ttt_secure_randint(int max);
 
+int
+ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
+        unsigned char *salt, size_t salt_len, unsigned char *key_dest,
+        size_t key_dest_size);
+
 #endif

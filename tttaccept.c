@@ -12,6 +12,7 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <netdb.h>
+#include <netinet/in.h>
 
 #include "tttutils.h"
 #include "tttaccept.h"
@@ -77,16 +78,18 @@ tttacctx_destroy(struct tttacctx *ctx) {
 }
 
 int
-tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short listen_port) {
+tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short listen_port, int use_tls) {
     int rc;
     char port_str[20];
     struct addrinfo hints;
     const int one = 1;
     int flags;
+    struct sockaddr_storage addr;
+    socklen_t addrlen;
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->listen_socket = -1;
-    ctx->use_tls = 0; // GOZZARD - tls not done yet
+    ctx->use_tls = use_tls;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -136,6 +139,25 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
         goto fail;
     }
 
+    addrlen = sizeof(addr);
+    rc = getsockname(ctx->listen_socket, (struct sockaddr *) &addr, &addrlen);
+    if (rc != 0) {
+        error(0, errno, "tttacctx_nit: getsockname");
+        goto fail;
+    }
+
+    switch (((struct sockaddr *) &addr)->sa_family) {
+        case AF_INET:
+            ctx->listen_port = ntohs(((struct sockaddr_in *) &addr)->sin_port);
+            break;
+        case AF_INET6:
+            ctx->listen_port = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
+            break;
+        default:
+            error(0, 0, "unexpected socket address family: %d", (int) ((struct sockaddr *) &addr)->sa_family);
+            goto fail;
+    }
+
     return 0;
 
 fail:
@@ -157,6 +179,11 @@ timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *r
         result->tv_sec = 0;
         result->tv_usec = 0;
     }
+}
+
+unsigned short
+tttacctx_get_listen_port(struct tttacctx *ctx) {
+    return ctx->listen_port;
 }
 
 int
@@ -253,6 +280,8 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
             for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
                 if ((s->want_read && FD_ISSET(s->sock, &readsockets)) ||
                         (s->want_write && FD_ISSET(s->sock, &writesockets))) {
+                    s->want_read = 0;
+                    s->want_write = 0;
                     rc = ttt_session_handshake(s);
                     if (rc == 0) {
                         /* Handshake completed successfully - this is the
@@ -315,12 +344,18 @@ int main(int argc, char **argv) {
     int rc;
 
     /* Listen on port 12345 */
-    if (tttacctx_init(&ctx, NULL, 12345)) {
+    if (tttacctx_init(&ctx, NULL, 12345, 0)) {
         error(1, 0, "tttacctx_init");
     }
 
-    /* Wait until we get a connection on that port then print the address
-     * and port that connected to us. Every second, time out and print a
+    /* Wait until we get a connection on that port.
+     *
+     * This connection must send us "hello\n".
+     * We then send it "hello\n". This is our plaintext "handshake".
+     * 
+     * Then we print the address and port that connected to us.
+     *
+     * Every second while waiting for this to happen, time out and print a
      * message. In the finished tool, instead of printing a message we'd
      * send another announcement datagram asking our other end to connect
      * to us. */
