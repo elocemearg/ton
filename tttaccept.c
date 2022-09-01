@@ -19,30 +19,22 @@
 
 static void
 tttacctx_free_session(struct tttacctx *ctx, struct ttt_session *s) {
-    s->destroy(s);
+    ttt_session_destroy(s);
     free(s);
 }
 
 static struct ttt_session *
 tttacctx_add_session(struct tttacctx *ctx, int new_socket, struct sockaddr *addr, socklen_t addr_len) {
     struct ttt_session *s;
+    int rc;
 
     s = malloc(sizeof(struct ttt_session));
     if (s == NULL) {
         return NULL;
     }
 
-    memset(s, 0, sizeof(*s));
-    s->sock = new_socket;
-    memcpy(&s->addr, addr, addr_len > sizeof(s->addr) ? sizeof(s->addr) : addr_len);
-    s->addr_len = addr_len;
-
-    s->want_read = 1;
-    s->want_write = 1;
-    s->failed = 0;
-    s->next = NULL;
-
-    if (ctx->session_init(s) < 0) {
+    rc = ttt_session_init(s, new_socket, addr, addr_len, ctx->use_tls, 1);
+    if (rc < 0) {
         free(s);
         return NULL;
     }
@@ -94,16 +86,7 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->listen_socket = -1;
-
     ctx->use_tls = 0; // GOZZARD - tls not done yet
-    if (ctx->use_tls) {
-        ctx->session_init = ttt_session_tls_init;
-        ctx->handshake = ttt_session_tls_handshake;
-    }
-    else {
-        ctx->session_init = ttt_session_plain_init;
-        ctx->handshake = ttt_session_plain_handshake;
-    }
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -270,7 +253,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
             for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
                 if ((s->want_read && FD_ISSET(s->sock, &readsockets)) ||
                         (s->want_write && FD_ISSET(s->sock, &writesockets))) {
-                    rc = ctx->handshake(s);
+                    rc = ttt_session_handshake(s);
                     if (rc == 0) {
                         /* Handshake completed successfully - this is the
                          * session we'll use, closing all the others. */
@@ -322,6 +305,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
     }
 }
 
+#ifdef TTT_ACCEPT_MAIN
 int main(int argc, char **argv) {
     struct tttacctx ctx;
     struct ttt_session new_session;
@@ -365,3 +349,4 @@ int main(int argc, char **argv) {
 
     return exit_status;
 }
+#endif

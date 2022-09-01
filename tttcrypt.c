@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <openssl/evp.h>
 #include <openssl/aes.h>
 #include <openssl/rand.h>
@@ -165,4 +166,18 @@ fail:
     ERR_error_string_n(ERR_get_error(), err_buf, sizeof(err_buf));
     error(0, 0, "openssl: %s", err_buf);
     goto end;
+}
+
+int
+ttt_secure_randint(int max) {
+    union {
+	    uint64_t n;
+		unsigned char s[8];
+    } u;
+    max = abs(max);
+
+    if (RAND_bytes(u.s, sizeof(u.n)) != 1) {
+        error(1, 0, "RAND_bytes failed!");
+	}
+	return (int) (u.n % max);
 }

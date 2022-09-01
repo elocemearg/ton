@@ -7,4 +7,7 @@ ttt_dump_hex(const void *data, size_t length, const char *context);
 int
 closesocket(int);
 
+int
+ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port);
+
 #endif

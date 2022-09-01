@@ -12,4 +12,9 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
 int
 ttt_set_random_bytes(char *dest, size_t length);
 
+/* Use OpenSSL's RAND_bytes to generate and return a random integer between 0
+ * and max - 1 inclusive. exit(1) if we fail to do this. */
+int
+ttt_secure_randint(int max);
+
 #endif

@@ -3,6 +3,9 @@
 #include <ctype.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 void
 ttt_dump_hex(const void *data, size_t length, const char *context) {
@@ -35,4 +38,21 @@ ttt_dump_hex(const void *data, size_t length, const char *context) {
 int
 closesocket(int fd) {
     return close(fd);
+}
+
+int
+ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
+    switch (addr->sa_family) {
+        case AF_INET:
+            ((struct sockaddr_in *) addr)->sin_port = htons(port);
+            break;
+
+        case AF_INET6:
+            ((struct sockaddr_in6 *) addr)->sin6_port = htons(port);
+            break;
+
+        default:
+            return -1;
+    }
+    return 0;
 }

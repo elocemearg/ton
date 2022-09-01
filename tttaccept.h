@@ -16,9 +16,6 @@ struct tttacctx {
     /* A linked list of partially-set-up sessions we've received so far.
      * We take the first one which successfully completes a handshake. */
     struct ttt_session *sessions;
-
-    int (*session_init)(struct ttt_session *s);
-    int (*handshake)(struct ttt_session *s);
 };
 
 /* Create a context to accept the right connection. This opens a listening
