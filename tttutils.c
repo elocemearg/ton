@@ -2,9 +2,13 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
+#include <stdarg.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
+#include <errno.h>
 #include <netinet/in.h>
 
 void
@@ -55,4 +59,117 @@ ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
             return -1;
     }
     return 0;
+}
+
+void
+ttt_error(int exit_status, int err, const char *format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    fflush(stdout);
+    fprintf(stderr, "ttt: ");
+    vfprintf(stderr, format, ap);
+    if (err != 0) {
+        fprintf(stderr, ": %s", strerror(err));
+    }
+    fprintf(stderr, "   \n");
+
+    va_end(ap);
+
+    if (exit_status != 0)
+        exit(exit_status);
+}
+
+char *
+ttt_vfalloc(const char *fmt, va_list ap) {
+    char *buf;
+    int buf_size;
+    int ret;
+
+    buf_size = 100;
+    buf = malloc(buf_size);
+    if (buf == NULL)
+        return NULL;
+
+    while (1) {
+        va_list ap_copy;
+        va_copy(ap_copy, ap);
+        ret = vsnprintf(buf, buf_size, fmt, ap_copy);
+        va_end(ap_copy);
+        if (ret < 0 || ret >= buf_size) {
+            char *new_buf;
+            int new_buf_size;
+            if (ret < 0) {
+                /* Not enough space, but we don't know how much we need... */
+                new_buf_size = buf_size * 2;
+            }
+            else {
+                new_buf_size = ret + 1;
+            }
+            new_buf = realloc(buf, new_buf_size);
+            if (new_buf == NULL) {
+                free(buf);
+                return NULL;
+            }
+            buf = new_buf;
+            buf_size = new_buf_size;
+        }
+        else {
+            break;
+        }
+    }
+    return buf;
+}
+
+int
+ttt_mkdir_parents(const char *pathname_orig, int mode, int parents_only, char dir_sep) {
+    size_t pathname_len;
+    char *pathname = strdup(pathname_orig);
+    int return_value = 0;
+
+    if (pathname == NULL)
+        return -1;
+
+    /* Remove any trailing directory separators from pathname */
+    pathname_len = strlen(pathname);
+    while (pathname_len > 0 && pathname[pathname_len - 1] == dir_sep)
+        pathname[--pathname_len] = '\0';
+
+    /* For every sub-path that's a prefix of this one, check if the directory
+     * exists and create it if it doesn't.
+     * Note we also iterate round the loop when pos == pathname_len, so that
+     * we create the last level directory as well if parents_only is not set.
+     * Start at pos = 1 so that if pathname is an absolute path e.g.
+     * /tmp/dest/a.txt we don't try to create "/" */
+    for (size_t pos = 1; pos <= pathname_len; pos++) {
+        if (pathname[pos] == dir_sep || (!parents_only && pathname[pos] == '\0')) {
+            struct stat st;
+            /* Does pathname[0 to pos] exist as a directory? */
+            pathname[pos] = '\0';
+            if (stat(pathname, &st) < 0 && errno == ENOENT) {
+                /* Doesn't exist - create it. */
+                if (mkdir(pathname, mode) < 0) {
+                    goto fail;
+                }
+            }
+            else if (!S_ISDIR(st.st_mode)) {
+                /* Exists but not as a directory */
+                errno = ENOTDIR;
+                goto fail;
+            }
+            /* Otherwise, this directory already exists. Put the directory
+             * separator back if we replaced it, and continue. */
+            if (pos < pathname_len) {
+                pathname[pos] = dir_sep;
+            }
+        }
+    }
+end:
+    free(pathname);
+    return return_value;
+
+fail:
+    return_value = -1;
+    goto end;
 }

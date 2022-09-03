@@ -15,5 +15,16 @@ tttaccepttest: tttaccept.c tttsession.c tttsession.h tttutils.h tttutils.c tttcr
 generatedwordlist.c: makewordlist.py wordlist.txt
 	./makewordlist.py wordlist.txt > generatedwordlist.c
 
+ttt: ttt.c tttpush.c tttpull.c tttpush.h tttpull.h tttdiscover.c tttdiscover.h \
+	tttutils.c tttutils.h tttcrypt.c tttcrypt.h tttnetif.c tttnetif.h \
+	tttsession.c tttsession.h tttaccept.c tttaccept.h \
+	tttprotocol.c tttprotocol.h tttfiletransfer.c tttfiletransfer.h \
+	generatedwordlist.c
+	gcc -Wall -g -o ttt \
+		ttt.c tttpush.c tttpull.c tttdiscover.c tttutils.c tttcrypt.c \
+		tttnetif.c tttsession.c tttaccept.c tttprotocol.c tttfiletransfer.c \
+		generatedwordlist.c \
+		-lcrypto -lssl
+
 clean:
 	rm tttdiscovertest tttaccepttest generatedwordlist.c

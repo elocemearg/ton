@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
-#include <error.h>
 #include <time.h>
 #include <assert.h>
 
@@ -18,6 +17,8 @@
 #include "tttnetif.h"
 #include "tttcrypt.h"
 #include "tttdiscover.h"
+#include "tttsession.h"
+#include "tttaccept.h"
 
 /* Magic number of discovery datagram: "TTT1" */
 #define TTT_DISCOVER_MAGIC 0x54545431UL
@@ -25,12 +26,6 @@
 /* Magic number of encrypted part of discovery datagram, once decrypted:
  * "ttt1" */
 #define TTT_DISCOVER_MAGIC2 0x74747431UL
-
-/* Arbitrary multicast address which the announcer multicasts to and the
- * listener subscribes to. */
-#define TTT_MULTICAST_RENDEZVOUS_ADDR "239.14.42.200"
-
-#define TTT_DEFAULT_DISCOVER_PORT 51205
 
 #define TTT_ENC_PLAIN 0 /* not permitted by default */
 #define TTT_ENC_AES_256_CBC 1
@@ -152,7 +147,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
     if (datagram_length < 8 || datagram_length > 263) {
         if (verbose)
-            error(0, 0, "validate_datagram: invalid length %d", datagram_length);
+            ttt_error(0, 0, "validate_datagram: invalid length %d", datagram_length);
         return -1;
     }
 
@@ -163,20 +158,20 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
     if (magic != TTT_DISCOVER_MAGIC) {
         if (verbose)
-            error(0, 0, "validate_datagram: first magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC, magic);
+            ttt_error(0, 0, "validate_datagram: first magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC, magic);
         return -1;
     }
 
     if (enc != 0 && enc != 1) {
         if (verbose)
-            error(0, 0, "validate_datagram: invalid encryption type %hu", enc);
+            ttt_error(0, 0, "validate_datagram: invalid encryption type %hu", enc);
         return -1;
     }
 
     if (enc == 0) {
         if (!allow_unencrypted) {
             if (verbose)
-                error(0, 0, "validate_datagram: datagram is not encrypted, rejecting it.");
+                ttt_error(0, 0, "validate_datagram: datagram is not encrypted, rejecting it.");
             return -1;
         }
         memcpy(payload, enc_payload_start, enc_payload_length);
@@ -185,7 +180,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     else {
         payload_length = ttt_aes_256_cbc_decrypt(enc_payload_start, enc_payload_length, payload, sizeof(payload), secret, secret_length);
         if (payload_length < 0) {
-            error(0, 0, "validate_datagram: ttt_aes_256_cbc_decrypt() failed");
+            ttt_error(0, 0, "validate_datagram: ttt_aes_256_cbc_decrypt() failed");
             return -1;
         }
     }
@@ -199,14 +194,14 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
     if (magic != TTT_DISCOVER_MAGIC2) {
         if (verbose)
-            error(0, 0, "validate_datagram: second magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC2, magic);
+            ttt_error(0, 0, "validate_datagram: second magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC2, magic);
         return -1;
     }
 
     crc32_obs = crc32(payload + DISCOVER_P_OFFSET_CRC_DATA_START, payload_length - DISCOVER_P_OFFSET_CRC_DATA_START);
     if (crc32_obs != crc32_exp) {
         if (verbose)
-            error(0, 0, "validate_datagram: CRC32 incorrect (expected 0x%08lx, calculated 0x%08lx)", crc32_exp, crc32_obs);
+            ttt_error(0, 0, "validate_datagram: CRC32 incorrect (expected 0x%08lx, calculated 0x%08lx)", crc32_exp, crc32_obs);
         return -1;
     }
 
@@ -215,7 +210,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     ts_diff = (unsigned long) (now & 0xFFFFFFFF) - datagram_timestamp;
     if (abs((int32_t)ts_diff) > DISCOVER_TIMESTAMP_TOLERANCE_SEC) {
         if (verbose)
-            error(0, 0, "validate_datagram: timestamp out of date, difference %d seconds", abs((int32_t) ts_diff));
+            ttt_error(0, 0, "validate_datagram: timestamp out of date, difference %d seconds", abs((int32_t) ts_diff));
         return -1;
     }
 
@@ -249,7 +244,7 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
 
     if (enc_type == TTT_ENC_PLAIN) {
         if (dest_max < DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length) {
-            error(0, 0, "make_announce_datagram: dest_max is too small (%d < %d)", dest_max, DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length);
+            ttt_error(0, 0, "make_announce_datagram: dest_max is too small (%d < %d)", dest_max, DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length);
             return -1;
         }
         memcpy(dest + DISCOVER_RD_OFFSET_PAYLOAD, plain, plain_payload_length);
@@ -260,12 +255,12 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
                 plain_payload_length, dest + DISCOVER_RD_OFFSET_PAYLOAD,
                 dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length);
         if (encrypted_payload_length < 0) {
-            error(0, 0, "make_announce_datagram: ttt_aes_256_cbc_encrypt() failed");
+            ttt_error(0, 0, "make_announce_datagram: ttt_aes_256_cbc_encrypt() failed");
             return -1;
         }
     }
     else {
-        error(0, 0, "make_announce_datagram: unrecognised enc_type %d", enc_type);
+        ttt_error(0, 0, "make_announce_datagram: unrecognised enc_type %d", enc_type);
         return -1;
     }
 
@@ -300,6 +295,16 @@ tttdlctx_set_port(struct tttdlctx *ctx, PORT port) {
     ctx->listen_port = port;
 }
 
+int
+tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr) {
+    char *new_addr = strdup(addr);
+    if (new_addr == NULL)
+        return -1;
+    free(ctx->multicast_rendezvous_addr);
+    ctx->multicast_rendezvous_addr = new_addr;
+    return 0;
+}
+
 void
 tttdlctx_destroy(struct tttdlctx *ctx) {
     free(ctx->secret);
@@ -329,24 +334,24 @@ tttdlctx_listen(struct tttdlctx *ctx,
 
     rc = getaddrinfo(NULL, port_str, &hints, &addrinfo);
     if (rc != 0) {
-        error(0, errno, "discover_listen: getaddrinfo");
+        ttt_error(0, errno, "discover_listen: getaddrinfo");
         goto fail;
     }
 
     listener = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol);
     if (listener < 0) {
-        error(0, errno, "discover_listen: socket");
+        ttt_error(0, errno, "discover_listen: socket");
         goto fail;
     }
 
     if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) {
-        error(0, errno, "discover_listen: setsockopt");
+        ttt_error(0, errno, "discover_listen: setsockopt");
         goto fail;
     }
 
     rc = bind(listener, addrinfo->ai_addr, addrinfo->ai_addrlen);
     if (rc != 0) {
-        error(0, errno, "discover_listen: bind");
+        ttt_error(0, errno, "discover_listen: bind");
         goto fail;
     }
 
@@ -360,7 +365,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
             group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
             group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
             if (setsockopt(listener, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *) &group, sizeof(group)) != 0) {
-                error(0, errno, "discover_listen: setsockopt IP_ADD_MEMBERSHIP");
+                ttt_error(0, errno, "discover_listen: setsockopt IP_ADD_MEMBERSHIP");
                 goto fail;
             }
         }
@@ -372,7 +377,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
         socklen_t addr_len = sizeof(peer_addr);
         rc = recvfrom(listener, datagram, sizeof(datagram), 0, (struct sockaddr *) &peer_addr, &addr_len);
         if (rc < 0) {
-            error(0, errno, "discover_listen: recvfrom");
+            ttt_error(0, errno, "discover_listen: recvfrom");
         }
         else {
             struct ttt_discover_result result;
@@ -416,7 +421,7 @@ make_dgram_addr_info(const char *multicast_rendezvous_addr, PORT announce_port, 
     snprintf(port_str, sizeof(port_str), "%hu", announce_port);
     rc = getaddrinfo(multicast_rendezvous_addr, port_str, &hints, res);
     if (rc != 0) {
-        error(0, errno, "discover_announce: getaddrinfo multicast");
+        ttt_error(0, errno, "discover_announce: getaddrinfo multicast");
         return -1;
     }
     return 0;
@@ -447,7 +452,7 @@ tttdactx_init(struct tttdactx *ctx,
     ctx->broadcast_if_addrs = ttt_get_broadcast_if_addrs(&ctx->num_broadcast_if_addrs);
     ctx->multicast_if_addrs = ttt_get_multicast_if_addrs(&ctx->num_multicast_if_addrs);
     if (ctx->num_broadcast_if_addrs <= 0 && ctx->num_multicast_if_addrs <= 0) {
-        error(0, 0, "no suitable network interfaces!");
+        ttt_error(0, 0, "no suitable network interfaces!");
         goto fail;
     }
 
@@ -459,7 +464,7 @@ tttdactx_init(struct tttdactx *ctx,
     ctx->num_sockets = ctx->num_broadcast_if_addrs + ctx->num_multicast_if_addrs;
     ctx->sockets = malloc(sizeof(int) * ctx->num_sockets);
     if (ctx->sockets == NULL) {
-        error(0, errno, "malloc");
+        ttt_error(0, errno, "malloc");
         goto fail;
     }
     for (int i = 0; i < ctx->num_sockets; i++) {
@@ -475,7 +480,7 @@ tttdactx_init(struct tttdactx *ctx,
         struct sockaddr *sa = (i < ctx->num_broadcast_if_addrs) ? ctx->broadcast_if_addrs[i] : ctx->multicast_if_addrs[i - ctx->num_broadcast_if_addrs];
         ctx->sockets[i] = socket(sa->sa_family, SOCK_DGRAM, 0);
         if (ctx->sockets[i] < 0) {
-            error(0, errno, "socket");
+            ttt_error(0, errno, "socket");
             goto fail;
         }
         if (i < ctx->num_broadcast_if_addrs) {
@@ -483,7 +488,7 @@ tttdactx_init(struct tttdactx *ctx,
              * of the struct sockaddr. */
             rc = setsockopt(ctx->sockets[i], SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
             if (rc < 0) {
-                error(0, errno, "discover_announce: setsockopt SO_BROADCAST");
+                ttt_error(0, errno, "discover_announce: setsockopt SO_BROADCAST");
                 goto fail;
             }
 
@@ -504,13 +509,13 @@ tttdactx_init(struct tttdactx *ctx,
             sin = (struct sockaddr_in *) sa;
             rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_IF, &sin->sin_addr, sizeof(sin->sin_addr));
             if (rc != 0) {
-                error(0, errno, "discover_announce: setsockopt IP_MULTICAST_IF");
+                ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_IF");
                 goto fail;
             }
 
             rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &multicast_ttl, sizeof(multicast_ttl));
             if (rc != 0) {
-                error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
+                ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
                 goto fail;
             }
         }
@@ -553,12 +558,22 @@ tttdactx_set_port(struct tttdactx *ctx, PORT port) {
     }
 }
 
+int
+tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr) {
+    char *new_addr = strdup(addr);
+    if (new_addr == NULL)
+        return -1;
+    free(ctx->multicast_rendezvous_addr);
+    ctx->multicast_rendezvous_addr = new_addr;
+    return 0;
+}
+
 void
 tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl) {
     for (int i = ctx->num_broadcast_if_addrs; i < ctx->num_sockets; i++) {
         int rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
         if (rc != 0) {
-            error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
+            ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
         }
     }
 }
@@ -591,7 +606,7 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
             ctx->secret, ctx->secret_length, TTT_ENC_AES_256_CBC,
             invitation_port);
     if (datagram_length < 0) {
-        error(0, errno, "discover_announce: failed to build datagram");
+        ttt_error(0, errno, "discover_announce: failed to build datagram");
         goto fail;
     }
 
@@ -615,11 +630,11 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
 
         bytes_sent = sendto(ctx->sockets[si], datagram, datagram_length, 0, sa, sa_len);
         if (bytes_sent < 0) {
-            error(0, errno, "discover_announce: sendto");
+            ttt_error(0, errno, "discover_announce: sendto");
             num_sockets_failed++;
         }
         else if (bytes_sent < datagram_length) {
-            error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
+            ttt_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
             num_sockets_failed++;
         }
     }
@@ -629,4 +644,218 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
 
 fail:
     return -1;
+}
+
+
+int
+ttt_discover_and_connect(const char *multicast_address, int discover_port,
+        const char *passphrase, size_t passphrase_length, int verbose,
+        struct ttt_session *new_sess) {
+    struct tttdlctx ctx;
+    int ctx_valid = 0;
+    struct sockaddr_storage peer_addr;
+    int peer_addr_len = sizeof(peer_addr);
+    PORT peer_invitation_port;
+    char peer_addr_str[100];
+    char peer_port_str[30];
+    const int use_tls = 1;
+    int rc;
+
+    /* Initialise a discovery listen context */
+    memset(&ctx, 0, sizeof(ctx));
+    if (tttdlctx_init(&ctx, passphrase, passphrase_length) != 0) {
+        ttt_error(0, 0, "failed to initialise listen context");
+        return -1;
+    }
+    ctx_valid = 1;
+
+    /* Listen for UDP announcement datagrams on a well-known port */
+    if (discover_port > 0) {
+        tttdlctx_set_port(&ctx, discover_port);
+    }
+
+    if (multicast_address) {
+        tttdlctx_set_multicast_addr(&ctx, multicast_address);
+    }
+
+    /* Listen until we receive a valid UDP datagram which was encrypted
+     * with our secret. This datagram, when decrypted, tells us which
+     * port to make a TCP connection to. */
+    rc = tttdlctx_listen(&ctx, &peer_addr, &peer_addr_len, &peer_invitation_port);
+    if (rc != 0) {
+        ttt_error(0, 0, "discover_listen failed.");
+        goto fail;
+    }
+
+    if (verbose) {
+        /* Look up who sent us a valid announcement and report to the user. */
+        rc = getnameinfo((struct sockaddr *) &peer_addr, sizeof(peer_addr),
+                peer_addr_str, sizeof(peer_addr_str),
+                peer_port_str, sizeof(peer_port_str),
+                NI_NUMERICHOST | NI_NUMERICSERV);
+        if (rc != 0) {
+            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+        }
+        else {
+            fprintf(stderr, "Discovered: %s port %s, invitation port %hu\n", peer_addr_str, peer_port_str, peer_invitation_port);
+        }
+    }
+    tttdlctx_destroy(&ctx);
+    ctx_valid = 0;
+
+    /* Connect to the host that sent us the valid announcement on
+     * the port it specified, and send a message. */
+    ttt_session_set_key(passphrase, passphrase_length);
+    ttt_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
+    if (ttt_session_connect(new_sess, (struct sockaddr *) &peer_addr, peer_addr_len, use_tls) < 0) {
+        ttt_error(0, 0, "failed to connect");
+        goto fail;
+    }
+    else if (ttt_session_handshake(new_sess) != 0) {
+        /* This socket is blocking, so ttt_session_handshake will either block
+         * and succeed, or fail permanently. It won't fail with want_read or
+         * want_write. */
+        ttt_error(0, 0, "handshake failed");
+        ttt_session_destroy(new_sess);
+        goto fail;
+    }
+
+    /* If we get here, we have discovered our peer and successfully established
+     * a TCP connection, encrypted and authenticated using the passphrase. */
+    return 0;
+
+fail:
+    if (ctx_valid) {
+        tttdlctx_destroy(&ctx);
+    }
+    return -1;
+}
+
+int
+ttt_discover_and_accept(const char *multicast_address, int discover_port,
+        int max_announcements, int announcement_interval_ms, int multicast_ttl,
+        const char *passphrase, size_t passphrase_length, int verbose,
+        struct ttt_session *new_sess) {
+    struct tttdactx dactx;
+    int dactx_valid = 0;
+    struct tttacctx acctx;
+    int acctx_valid = 0;
+    int announcement;
+    char peer_addr_str[100];
+    char peer_addr_port[30];
+    const int use_tls = 1;
+    PORT invitation_port = 0;
+    int new_sess_valid = 0;
+    int rc;
+    int num_failed_announcements = 0, max_failed_announcements = 10;
+
+    /* Initialise a "discovery announce" context, where we will send
+     * UDP datagrams, encrypted with the passphrase, which contain among
+     * other things the port number we're inviting the other owner of
+     * this passphrase to connect to. */
+    memset(&dactx, 0, sizeof(dactx));
+    memset(&acctx, 0, sizeof(acctx));
+    if (tttdactx_init(&dactx, passphrase, passphrase_length) != 0) {
+        ttt_error(0, 0, "failed to initialise announce context");
+        goto fail;
+    }
+    dactx_valid = 1;
+
+    /* Open our listening TCP socket on the invitation port. */
+    if (tttacctx_init(&acctx, NULL, invitation_port, use_tls) < 0) {
+        ttt_error(0, 0, "failed to initialise connection accept context");
+        goto fail;
+    }
+    acctx_valid = 1;
+
+    invitation_port = tttacctx_get_listen_port(&acctx);
+
+    /* Set TTL, if required. This affects our outgoing announcement
+     * datagrams. */
+    if (multicast_ttl > 1) {
+        tttdactx_set_multicast_ttl(&dactx, multicast_ttl);
+    }
+
+    /* Set the multicast address and discovery port if required, but usually
+     * these are expected to stay as their defaults. */
+    if (multicast_address) {
+        tttdactx_set_multicast_addr(&dactx, multicast_address);
+    }
+
+    if (discover_port > 0) {
+        tttdactx_set_port(&dactx, discover_port);
+    }
+
+    /* Set the secret passphrase we're going to use for our session.
+     * This will be used in the TLS handshake we do with any incoming
+     * connection, and the other end of it should have the same passphrase.
+     */
+    ttt_session_set_key(passphrase, passphrase_length);
+
+    /* Send a number of announcements, with a suitable time gap in between.
+     * Each announcement is a UDP datagram sent to a broadcast and/or
+     * multicast address, so anything on the same network which is looking
+     * for it should see it.
+     * We keep sending announcements until we reach the limit
+     * (num_announcements) or until we receive a connection on our TCP
+     * listening socket which successfully completes a handshake proving
+     * it has the right passphrase.
+     */
+    for (announcement = 0; max_announcements == 0 || announcement < max_announcements; announcement++) {
+        if (announcement > 0) {
+            /* Listen for incoming connections on our TCP socket. If
+             * announcement_gap_ms milliseconds go by with nobody connecting to
+             * us and completing a handshake, time out and make another UDP
+             * announcement. */
+            rc = tttacctx_accept(&acctx, announcement_interval_ms, new_sess);
+            if (rc < 0) {
+                ttt_error(0, 0, "fatal error waiting for incoming connection");
+                goto fail;
+            }
+            else if (rc == 0) {
+                /* timeout */
+            }
+            else {
+                /* Success! new_sess now contains a session which connected to
+                 * the correct port and successfully handshook with us. */
+                new_sess_valid = 1;
+                if (verbose) {
+                    if (ttt_session_get_peer_addr(new_sess, peer_addr_str, sizeof(peer_addr_str), peer_addr_port, sizeof(peer_addr_port)) == 0) {
+                        fprintf(stderr, "Accepted connection from %s:%s\n", peer_addr_str, peer_addr_port);
+                    }
+                }
+                break;
+            }
+        }
+
+        /* No successful incoming connection yet, so send out another
+         * broadcast/multicast announcement inviting anyone who decrypts
+         * it to connect to us. */
+        rc = tttdactx_announce(&dactx, invitation_port);
+        if (rc != 0) {
+            ttt_error(0, 0, "discover_announce failed.");
+            num_failed_announcements++;
+            if (num_failed_announcements > max_failed_announcements) {
+                 break;
+            }
+        }
+    }
+
+end:
+    if (dactx_valid)
+        tttdactx_destroy(&dactx);
+    if (acctx_valid)
+        tttacctx_destroy(&acctx);
+
+    if (new_sess_valid)
+        return 0;
+    else
+        return -1;
+
+fail:
+    if (new_sess_valid) {
+        ttt_session_destroy(new_sess);
+        new_sess_valid = 0;
+    }
+    goto end;
 }

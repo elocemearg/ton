@@ -6,14 +6,17 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 #include <errno.h>
-#include <error.h>
+#include <termios.h>
+
+#include "tttwordlist.h"
+#include "tttutils.h"
 
 int
 ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
         const unsigned char *salt, size_t salt_len, unsigned char *key_dest,
         size_t key_dest_size) {
     if (PKCS5_PBKDF2_HMAC_SHA1(passphrase, passphrase_len, salt, salt_len, 1000, key_dest_size, key_dest) != 1) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: PKCS5_PBKDF2_HMAC_SHA1() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: PKCS5_PBKDF2_HMAC_SHA1() failed");
         return -1;
     }
     return 0;
@@ -62,7 +65,7 @@ ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
     }
 
     if (dest_max < ciphertext_len + 16) {
-        error(0, 0, "ttt_aes_256_cbc_decrypt(): dest_max too small (%zd)!", dest_max);
+        ttt_error(0, 0, "ttt_aes_256_cbc_decrypt(): dest_max too small (%zd)!", dest_max);
         goto fail;
     }
 
@@ -109,18 +112,18 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
 
     ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_CIPHER_CTX_new() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_CIPHER_CTX_new() failed");
         goto fail;
     }
 
     cipher = EVP_aes_256_cbc();
     if (cipher == NULL) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_aws_256_cbc() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_aws_256_cbc() failed");
         goto fail;
     }
 
     if (ttt_set_random_bytes(salt, sizeof(salt)) || ttt_set_random_bytes(iv, sizeof(iv))) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: RAND_bytes() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: RAND_bytes() failed");
         goto fail;
     }
 
@@ -130,7 +133,7 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     }
 
     if (EVP_EncryptInit_ex(ctx, cipher, NULL, key, iv) != 1) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptInit_ex() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptInit_ex() failed");
         goto fail;
     }
 
@@ -138,7 +141,7 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
      * and the maximum size the ciphertext could possibly be, which is the
      * plaintext length plus the maximum padding (1x block size = 16 bytes). */
     if (dest_max < sizeof(salt) + sizeof(iv) + src_len + 16) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt(): dest_max (%zd) too small!", dest_max);
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt(): dest_max (%zd) too small!", dest_max);
         goto fail;
     }
 
@@ -152,13 +155,13 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
 
     /* Now write the encrypted data after that. */
     if (EVP_EncryptUpdate(ctx, dest_ptr, &l, (const unsigned char *) src, src_len) != 1) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptUpdate() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptUpdate() failed");
         goto fail;
     }
     dest_ptr += l;
 
     if (EVP_EncryptFinal(ctx, dest_ptr, &l) != 1) {
-        error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptFinal() failed");
+        ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: EVP_EncryptFinal() failed");
         goto fail;
     }
     dest_ptr += l;
@@ -174,7 +177,7 @@ end:
 fail:
     rc = -1;
     ERR_error_string_n(ERR_get_error(), err_buf, sizeof(err_buf));
-    error(0, 0, "openssl: %s", err_buf);
+    ttt_error(0, 0, "openssl: %s", err_buf);
     goto end;
 }
 
@@ -187,7 +190,84 @@ ttt_secure_randint(int max) {
     max = abs(max);
 
     if (RAND_bytes(u.s, sizeof(u.n)) != 1) {
-        error(1, 0, "RAND_bytes failed!");
+        ttt_error(1, 0, "RAND_bytes failed!");
 	}
 	return (int) (u.n % max);
+}
+
+
+char *
+ttt_generate_passphrase(int num_words) {
+    int pos = 0;
+    char *passphrase = malloc((ttt_wordlist_get_max_word_length() + 1) * num_words);
+
+    if (passphrase == NULL)
+        return NULL;
+
+    for (int i = 0; i < num_words; ++i) {
+        int n = ttt_secure_randint(ttt_wordlist_length());
+        const char *word = ttt_wordlist_get_word(n);
+        if (i > 0)
+            passphrase[pos++] = ' ';
+        strcpy(passphrase + pos, word);
+        pos += strlen(word);
+    }
+    return passphrase;
+}
+
+char *
+ttt_prompt_passphrase(const char *prompt) {
+    int c;
+    int buf_size = 80;
+    int buf_pos = 0;
+    struct termios t;
+    char *buf = malloc(buf_size);
+
+    fprintf(stderr, "%s", prompt);
+
+    /* Switch off terminal echo */
+    if (tcgetattr(0, &t) < 0) {
+        ttt_error(0, errno, "tcgetattr");
+        goto fail;
+    }
+    t.c_lflag &= ~ECHO;
+    if (tcsetattr(0, TCSANOW, &t) < 0) {
+        ttt_error(0, errno, "tcsetattr");
+        goto fail;
+    }
+
+    /* Read a single line */
+    while ((c = fgetc(stdin)) != '\n' && c != EOF) {
+        if (c != '\r') {
+            buf[buf_pos++] = (char) c;
+            if (buf_pos >= buf_size) {
+                char *new_buf = realloc(buf, buf_size *= 2);
+                if (new_buf == NULL) {
+                    ttt_error(0, errno, "realloc");
+                    goto fail;
+                }
+                buf = new_buf;
+            }
+        }
+    }
+    buf[buf_pos] = '\0';
+
+end:
+    /* Switch terminal echo back on */
+    t.c_lflag |= ECHO;
+    if (tcsetattr(0, TCSANOW, &t) < 0) {
+        ttt_error(0, errno, "tcsetattr");
+        goto fail;
+    }
+
+    /* Echo the newline */
+    putchar('\n');
+
+    /* Return the newly allocated line */
+    return buf;
+
+fail:
+    free(buf);
+    buf = NULL;
+    goto end;
 }

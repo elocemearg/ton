@@ -22,4 +22,10 @@ ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
         unsigned char *salt, size_t salt_len, unsigned char *key_dest,
         size_t key_dest_size);
 
+char *
+ttt_prompt_passphrase(const char *prompt);
+
+char *
+ttt_generate_passphrase(int num_words);
+
 #endif

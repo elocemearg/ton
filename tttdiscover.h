@@ -3,6 +3,14 @@
 
 #include <sys/types.h>
 
+#include "tttsession.h"
+
+/* Arbitrary multicast address which the announcer multicasts to and the
+ * listener subscribes to. */
+#define TTT_MULTICAST_RENDEZVOUS_ADDR "239.14.42.200"
+
+#define TTT_DEFAULT_DISCOVER_PORT 51205
+
 typedef uint16_t PORT;
 
 /* TTT discovery listen context */
@@ -86,5 +94,15 @@ tttdlctx_listen(struct tttdlctx *ctx,
 void
 tttdlctx_destroy(struct tttdlctx *ctx);
 
+int
+ttt_discover_and_connect(const char *multicast_address, int discover_port,
+        const char *passphrase, size_t passphrase_length, int verbose,
+        struct ttt_session *new_sess);
+
+int
+ttt_discover_and_accept(const char *multicast_address, int discover_port,
+        int max_announcements, int announcement_interval_ms, int multicast_ttl,
+        const char *passphrase, size_t passphrase_length, int verbose,
+        struct ttt_session *new_sess);
 
 #endif
