@@ -16,7 +16,7 @@
 #include "tttutils.h"
 
 #define DIR_SEP_STR "/"
-#define DIR_SEP (DIR_SEP_STR[0])
+const char DIR_SEP = DIR_SEP_STR[0];
 
 #define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
 
@@ -341,48 +341,6 @@ add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
     return 0;
 }
 
-#if 0
-/* Return the length of the longest directory prefix common to all entries in
- * the list. If there is no common prefix, return zero. If this returns nonzero
- * then entry->local_path[returnvalue] is guaranteed to be a directory
- * separator character for all entries in the list.
- */
-static int
-get_longest_common_local_prefix_length(struct ttt_file_list *list) {
-    char *prefix = NULL;
-    int prefix_length = -1;
-    for (struct ttt_file *cur = list->start; cur; cur = cur->next) {
-        /* Initialise dir_sep to point to the last dir separator in this path */
-        if (prefix == NULL) {
-            char *dir_sep = strrchr(cur->local_path, DIR_SEP);
-            prefix = cur->local_path;
-            prefix_length = 1 + dir_sep - cur->local_path;
-        }
-        else if (strncmp(cur->local_path, prefix, prefix_length)) {
-            /* This path doesn't begin with the best prefix we have so far.
-             * Find the longest prefix common to that and this. */
-            char *dir_sep;
-            size_t local_path_length = strlen(cur->local_path);
-
-            /* Start dir_sep on the last directory separator at prefix_length
-             * or earlier... */
-            if (local_path_length < prefix_length)
-                dir_sep = cur->local_path + local_path_length;
-            else
-                dir_sep = cur->local_path + prefix_length;
-            for (; dir_sep > cur->local_path && *dir_sep != DIR_SEP; --dir_sep);
-            while (dir_sep > cur->local_path && strncmp(cur->local_path, prefix, 1 + dir_sep - cur->local_path)) {
-                /* Wind dir_sep back to the previous dir separator... */
-                for (--dir_sep; dir_sep > cur->local_path && *dir_sep != DIR_SEP; --dir_sep);
-            }
-            prefix = cur->local_path;
-            prefix_length = 1 + dir_sep - cur->local_path;
-        }
-    }
-    return prefix_length;
-}
-#endif
-
 static int
 readall(struct ttt_session *sess, void *buf, int length) {
     size_t bytes_read = 0;
@@ -442,10 +400,13 @@ static int
 ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
     size_t bytes_sent = 0;
     do {
-        int rc = sess->write(sess, msg->data + bytes_sent, msg->length - bytes_sent);
+        int rc;
+        errno = 0;
+        rc = sess->write(sess, msg->data + bytes_sent, msg->length - bytes_sent);
         if (rc <= 0) {
             if (rc < 0 && errno == EINTR)
                 continue;
+            ttt_error(0, errno, "connection interrupted");
             return -1;
         }
         bytes_sent += rc;
@@ -625,27 +586,6 @@ ttt_file_transfer_session_sender(struct ttt_session *sess,
             walk_failures = 1;
         }
     }
-
-#if 0
-    /* Now fill in ttt_name in each file entry. This has the longest common
-     * directory prefix removed from the start, and any directory separators
-     * replaced with '/'. */
-    longest_common_prefix = get_longest_common_local_prefix_length(&file_list);
-    assert(longest_common_prefix >= 0 || file_list.start == NULL);
-    for (struct ttt_file *f = file_list.start; f; f = f->next) {
-        f->ttt_name = strdup(f->local_path + longest_common_prefix);
-        if (f->ttt_name == NULL) {
-            ttt_error(0, errno, "strdup");
-            goto fail;
-        }
-        if (DIR_SEP != '/') {
-            for (int i = 0; f->ttt_name[i]; i++) {
-                if (f->ttt_name[i] == DIR_SEP)
-                    f->ttt_name[i] = '/';
-            }
-        }
-    }
-#endif
 
     if (walk_failures && file_list.start == NULL) {
         /* All files failed to be walked */
