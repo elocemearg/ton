@@ -1,30 +1,29 @@
-tttdiscovertest: tttdiscovertest.c tttdiscover.c tttdiscover.h \
-	tttutils.c tttutils.h tttcrypt.c tttcrypt.h tttnetif.c tttnetif.h \
-	tttsession.c tttsession.h tttaccept.c tttaccept.h \
+tttdiscovertest: tttdiscovertest.c discover.c discover.h \
+	utils.c utils.h encryption.c encryption.h netif.c netif.h \
+	session.c session.h accept.c accept.h \
 	generatedwordlist.c
 	gcc -Wall -g -o tttdiscovertest \
-		tttdiscovertest.c tttdiscover.c tttnetif.c tttutils.c tttcrypt.c \
-		tttsession.c tttaccept.c generatedwordlist.c \
+		tttdiscovertest.c discover.c netif.c utils.c encryption.c \
+		session.c accept.c generatedwordlist.c \
 		-lcrypto -lssl
 
 tttaccepttest: tttaccept.c tttsession.c tttsession.h tttutils.h tttutils.c tttcrypt.h tttcrypt.c
 	gcc -Wall -DTTT_ACCEPT_MAIN=1 -g -o tttaccepttest \
-		tttaccept.c tttsession.c tttutils.c tttcrypt.c \
+		accept.c session.c utils.c encryption.c \
 		-lcrypto -lssl
 
 generatedwordlist.c: makewordlist.py wordlist.txt
 	./makewordlist.py wordlist.txt > generatedwordlist.c
 
-ttt: ttt.c tttpush.c tttpull.c tttpush.h tttpull.h tttdiscover.c tttdiscover.h \
-	tttutils.c tttutils.h tttcrypt.c tttcrypt.h tttnetif.c tttnetif.h \
-	tttsession.c tttsession.h tttaccept.c tttaccept.h \
-	tttprotocol.c tttprotocol.h tttfiletransfer.c tttfiletransfer.h \
-	generatedwordlist.c
+ttt: ttt.c tttpush.c tttpull.c tttpush.h tttpull.h discover.c discover.h \
+	utils.c utils.h encryption.c encryption.h netif.c netif.h \
+	session.c session.h accept.c accept.h protocol.c protocol.h \
+	filetransfer.c filetransfer.h generatedwordlist.c
 	gcc -Wall -g -o ttt \
-		ttt.c tttpush.c tttpull.c tttdiscover.c tttutils.c tttcrypt.c \
-		tttnetif.c tttsession.c tttaccept.c tttprotocol.c tttfiletransfer.c \
+		ttt.c tttpush.c tttpull.c discover.c utils.c encryption.c \
+		netif.c session.c accept.c protocol.c filetransfer.c \
 		generatedwordlist.c \
 		-lcrypto -lssl
 
 clean:
-	rm tttdiscovertest tttaccepttest generatedwordlist.c
+	rm ttt tttdiscovertest tttaccepttest generatedwordlist.c

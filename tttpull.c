@@ -3,11 +3,11 @@
 #include <string.h>
 #include <getopt.h>
 
-#include "tttcrypt.h"
-#include "tttutils.h"
-#include "tttsession.h"
-#include "tttfiletransfer.h"
-#include "tttdiscover.h"
+#include "encryption.h"
+#include "utils.h"
+#include "session.h"
+#include "filetransfer.h"
+#include "discover.h"
 
 enum main_pull_longopts {
     PULL_MAX_ANNOUNCEMENTS = 256,

@@ -7,14 +7,13 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <errno.h>
-#include <error.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#include "tttsession.h"
-#include "tttutils.h"
-#include "tttcrypt.h"
+#include "session.h"
+#include "utils.h"
+#include "encryption.h"
 
 /* One global pre-shared key, set with ttt_session_set_key.
  * It's a 256-bit key generated from a passphrase. */
@@ -82,14 +81,14 @@ handshake_receive_hello(struct ttt_session *s) {
             return -1;
         }
         else {
-            error(0, errno, "handshake read");
+            ttt_error(0, errno, "handshake read");
             s->failed = 1;
             show_ssl_errors(stderr);
             return -1;
         }
     }
     else if (rc == 0) {
-        error(0, 0, "unexpected EOF from peer");
+        ttt_error(0, 0, "unexpected EOF from peer");
         s->failed = 1;
         return -1;
     }
@@ -100,7 +99,7 @@ handshake_receive_hello(struct ttt_session *s) {
             return 0;
         }
         else {
-            error(0, 0, "unexpected handshake message: %.*s", s->plaintext_handshake_message_pos, s->plaintext_handshake_message);
+            ttt_error(0, 0, "unexpected handshake message: %.*s", s->plaintext_handshake_message_pos, s->plaintext_handshake_message);
             s->failed = 1;
             return -1;
         }
@@ -126,14 +125,14 @@ handshake_send_hello(struct ttt_session *s) {
             return -1;
         }
         else {
-            error(0, errno, "handshake write");
+            ttt_error(0, errno, "handshake write");
             s->failed = 1;
             show_ssl_errors(stderr);
             return -1;
         }
     }
     else if (rc == 0) {
-        error(0, 0, "unexpected EOF during handshake write");
+        ttt_error(0, 0, "unexpected EOF during handshake write");
         s->failed = 1;
         return -1;
     }
@@ -293,7 +292,7 @@ psk_client_cb(SSL *ssl, const char *hint,
         identity[max_identity_len - 1] = '\0';
 
     if (ttt_session_key_length > max_psk_len) {
-        error(0, 0, "psk_client_cb: psk buffer not big enough!");
+        ttt_error(0, 0, "psk_client_cb: psk buffer not big enough!");
         return 0;
     }
     memcpy(psk, ttt_session_key, ttt_session_key_length);
@@ -312,7 +311,7 @@ ssl_trace(int write_p, int version, int content_type, const void *buf, size_t le
 static unsigned int
 psk_server_cb(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len) {
     if (ttt_session_key_length > max_psk_len) {
-        error(0, 0, "psk_server_cb: psk buffer not big enough!");
+        ttt_error(0, 0, "psk_server_cb: psk buffer not big enough!");
         return 0;
     }
     memcpy(psk, ttt_session_key, ttt_session_key_length);
@@ -338,7 +337,7 @@ ttt_session_tls_init(struct ttt_session *s) {
 
     s->ssl_ctx = SSL_CTX_new(method);
     if (s->ssl_ctx == NULL) {
-        error(0, 0, "SSL_CTX_new failed");
+        ttt_error(0, 0, "SSL_CTX_new failed");
         return -1;
     }
 
@@ -405,14 +404,14 @@ ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
 
     sock = socket(addr->sa_family, SOCK_STREAM, 0);
     if (sock < 0) {
-        error(0, errno, "socket");
+        ttt_error(0, errno, "socket");
         rc = -1;
     }
 
     if (rc == 0) {
         rc = connect(sock, addr, addr_len);
         if (rc != 0) {
-            error(0, errno, "connect");
+            ttt_error(0, errno, "connect");
         }
     }
 
@@ -441,7 +440,7 @@ ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_
             addr_dest, addr_dest_len, port_dest, port_dest_len,
             NI_NUMERICHOST | NI_NUMERICSERV);
     if (rc != 0) {
-        error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+        ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
     }
     return rc;
 }

@@ -5,11 +5,11 @@
 #include <unistd.h>
 #include <errno.h>
 
-#include "tttcrypt.h"
-#include "tttutils.h"
-#include "tttsession.h"
-#include "tttfiletransfer.h"
-#include "tttdiscover.h"
+#include "encryption.h"
+#include "utils.h"
+#include "session.h"
+#include "filetransfer.h"
+#include "discover.h"
 
 enum main_push_longopts {
     PUSH_PASSPHRASE = 256,

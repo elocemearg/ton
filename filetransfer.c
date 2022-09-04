@@ -10,10 +10,10 @@
 #include <sys/time.h>
 #include <errno.h>
 
-#include "tttfiletransfer.h"
-#include "tttsession.h"
-#include "tttprotocol.h"
-#include "tttutils.h"
+#include "filetransfer.h"
+#include "session.h"
+#include "protocol.h"
+#include "utils.h"
 
 #define DIR_SEP_STR "/"
 const char DIR_SEP = DIR_SEP_STR[0];

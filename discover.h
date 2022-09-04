@@ -3,7 +3,7 @@
 
 #include <sys/types.h>
 
-#include "tttsession.h"
+#include "session.h"
 
 /* Arbitrary multicast address which the announcer multicasts to and the
  * listener subscribes to. */

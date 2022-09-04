@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
-#include <error.h>
 #include <errno.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -10,11 +9,12 @@
 #include <termios.h>
 #include <signal.h>
 
-#include "tttdiscover.h"
-#include "tttaccept.h"
-#include "tttsession.h"
-#include "tttwordlist.h"
-#include "tttcrypt.h"
+#include "discover.h"
+#include "accept.h"
+#include "session.h"
+#include "wordlist.h"
+#include "encryption.h"
+#include "utils.h"
 
 int main(int argc, char **argv) {
     int c;
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
             case 't':
                 multicast_ttl = atoi(optarg);
                 if (multicast_ttl < 1 || multicast_ttl > 10) {
-                    error(1, 0, "multicast TTL must be between 1 and 10");
+                    ttt_error(1, 0, "multicast TTL must be between 1 and 10");
                 }
                 break;
 
@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
         rc = ttt_discover_and_connect(NULL, discover_port, secret,
                 strlen(secret), 1, &sess);
         if (rc < 0) {
-            error(1, 0, "failed to discover and connect to remote host");
+            ttt_error(1, 0, "failed to discover and connect to remote host");
         }
 
         /* If we get here, we connected to the host and successfully
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
          * but in this test application we just send a short message. */
         int len = sess.write(&sess, payload_message, strlen(payload_message));
         if (len < 0) {
-            error(0, errno, "send");
+            ttt_error(0, errno, "send");
         }
         else {
             sess.write(&sess, "\n", 1);
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
                 num_announcements, announcement_gap_ms, multicast_ttl,
                 secret, strlen(secret), 1, &tcp_session);
         if (rc < 0) {
-            error(1, 0, "failed to discover and accept connection");
+            ttt_error(1, 0, "failed to discover and accept connection");
         }
         else {
             tcp_session_valid = 1;
@@ -128,11 +128,11 @@ int main(int argc, char **argv) {
             char buf[100];
             int len = tcp_session.read(&tcp_session, buf, sizeof(buf));
             if (len < 0) {
-                error(0, errno, "read");
+                ttt_error(0, errno, "read");
                 exit_status = 1;
             }
             else if (len == 0) {
-                error(0, 0, "peer closed connection without sending anything");
+                ttt_error(0, 0, "peer closed connection without sending anything");
                 exit_status = 1;
             }
             else {

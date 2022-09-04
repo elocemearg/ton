@@ -13,12 +13,12 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#include "tttutils.h"
-#include "tttnetif.h"
-#include "tttcrypt.h"
-#include "tttdiscover.h"
-#include "tttsession.h"
-#include "tttaccept.h"
+#include "utils.h"
+#include "netif.h"
+#include "encryption.h"
+#include "discover.h"
+#include "session.h"
+#include "accept.h"
 
 /* Magic number of discovery datagram: "TTT1" */
 #define TTT_DISCOVER_MAGIC 0x54545431UL
@@ -355,7 +355,11 @@ tttdlctx_listen(struct tttdlctx *ctx,
         goto fail;
     }
 
+    errno = 0;
     multicast_if_addrs = ttt_get_multicast_if_addrs(&num_multicast_if_addrs);
+    if (multicast_if_addrs == NULL && errno != 0) {
+        ttt_error(0, errno, "failed to get list of multicast interfaces");
+    }
     for (int i = 0; i < num_multicast_if_addrs; i++) {
         /* Your ideas are intriguing to me
          * and I wish to subscribe to your newsletter. */
@@ -449,8 +453,18 @@ tttdactx_init(struct tttdactx *ctx,
      * to try a broadcast packet on every interface on which we can broadcast,
      * and a multicast packet on every interface that supports multicast and
      * has a non-public IP address. */
+    errno = 0;
     ctx->broadcast_if_addrs = ttt_get_broadcast_if_addrs(&ctx->num_broadcast_if_addrs);
+    if (ctx->broadcast_if_addrs == NULL && errno != 0) {
+        ttt_error(0, errno, "failed to get list of broadcast-enabled interfaces");
+    }
+
+    errno = 0;
     ctx->multicast_if_addrs = ttt_get_multicast_if_addrs(&ctx->num_multicast_if_addrs);
+    if (ctx->multicast_if_addrs == NULL && errno != 0) {
+        ttt_error(0, errno, "failed to get list of multicast-enabled interfaces");
+    }
+
     if (ctx->num_broadcast_if_addrs <= 0 && ctx->num_multicast_if_addrs <= 0) {
         ttt_error(0, 0, "no suitable network interfaces!");
         goto fail;

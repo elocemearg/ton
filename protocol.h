@@ -313,7 +313,7 @@ ttt_msg_decode_header(struct ttt_msg *msg, const void *header, int *tag, int *bo
 
 /* Build a message with the given tag type. ap must contain the correct number
  * of arguments of the correct type for the tag, as defined in msg_defs in
- * tttprotocol.c. */
+ * protocol.c. */
 int
 ttt_build_message(struct ttt_msg *msg, int tag, va_list ap);
 

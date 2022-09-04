@@ -4,9 +4,9 @@
 #include <stdarg.h>
 #include <arpa/inet.h>
 
-#include "tttprotocol.h"
-#include "tttsession.h"
-#include "tttutils.h"
+#include "protocol.h"
+#include "session.h"
+#include "utils.h"
 
 struct ttt_msg_def {
     /* Message tag, e.g. TTT_MSG_FILE_METADATA. */

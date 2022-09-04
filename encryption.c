@@ -8,8 +8,8 @@
 #include <errno.h>
 #include <termios.h>
 
-#include "tttwordlist.h"
-#include "tttutils.h"
+#include "wordlist.h"
+#include "utils.h"
 
 int
 ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,

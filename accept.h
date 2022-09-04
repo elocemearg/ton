@@ -3,8 +3,8 @@
 
 #include <sys/types.h>
 
-#include "tttutils.h"
-#include "tttsession.h"
+#include "utils.h"
+#include "session.h"
 
 /* TTT accept connection context. */
 struct tttacctx {

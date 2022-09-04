@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <error.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <assert.h>
@@ -14,9 +13,9 @@
 #include <netdb.h>
 #include <netinet/in.h>
 
-#include "tttutils.h"
-#include "tttaccept.h"
-#include "tttsession.h"
+#include "utils.h"
+#include "accept.h"
+#include "session.h"
 
 static void
 tttacctx_free_session(struct tttacctx *ctx, struct ttt_session *s) {
@@ -100,7 +99,7 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
 
     rc = getaddrinfo(listen_addr, port_str, &hints, &ctx->listen_addrinfo);
     if (rc != 0) {
-        error(0, 0, "tttacctx_init: getaddrinfo: %s", gai_strerror(rc));
+        ttt_error(0, 0, "tttacctx_init: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
@@ -110,13 +109,13 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
             ctx->listen_addrinfo->ai_protocol);
     
     if (ctx->listen_socket < 0) {
-        error(0, errno, "tttacctx_init: socket");
+        ttt_error(0, errno, "tttacctx_init: socket");
         goto fail;
     }
 
     rc = setsockopt(ctx->listen_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     if (rc != 0) {
-        error(0, errno, "tttacctx_init: setsockopt");
+        ttt_error(0, errno, "tttacctx_init: setsockopt");
         goto fail;
     }
 
@@ -129,20 +128,20 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
     rc = bind(ctx->listen_socket, ctx->listen_addrinfo->ai_addr,
             ctx->listen_addrinfo->ai_addrlen);
     if (rc != 0) {
-        error(0, errno, "tttacctx_init: bind");
+        ttt_error(0, errno, "tttacctx_init: bind");
         goto fail;
     }
 
     rc = listen(ctx->listen_socket, 10);
     if (rc != 0) {
-        error(0, errno, "tttacctx_init: listen");
+        ttt_error(0, errno, "tttacctx_init: listen");
         goto fail;
     }
 
     addrlen = sizeof(addr);
     rc = getsockname(ctx->listen_socket, (struct sockaddr *) &addr, &addrlen);
     if (rc != 0) {
-        error(0, errno, "tttacctx_nit: getsockname");
+        ttt_error(0, errno, "tttacctx_init: getsockname");
         goto fail;
     }
 
@@ -154,7 +153,7 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
             ctx->listen_port = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
             break;
         default:
-            error(0, 0, "unexpected socket address family: %d", (int) ((struct sockaddr *) &addr)->sa_family);
+            ttt_error(0, 0, "unexpected socket address family: %d", (int) ((struct sockaddr *) &addr)->sa_family);
             goto fail;
     }
 
@@ -243,7 +242,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         }
         else if (rc < 0) {
             /* Failure */
-            error(0, errno, "select");
+            ttt_error(0, errno, "select");
             return rc;
         }
         else {
@@ -345,7 +344,7 @@ int main(int argc, char **argv) {
 
     /* Listen on port 12345 */
     if (tttacctx_init(&ctx, NULL, 12345, 0)) {
-        error(1, 0, "tttacctx_init");
+        ttt_error(1, 0, "tttacctx_init");
     }
 
     /* Wait until we get a connection on that port.
@@ -371,7 +370,7 @@ int main(int argc, char **argv) {
                 NI_NUMERICHOST | NI_NUMERICSERV);
 
         if (rc != 0) {
-            error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
             exit_status = 1;
         }
         else {

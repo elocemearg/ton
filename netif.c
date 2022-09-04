@@ -6,8 +6,6 @@
 #include <netinet/in.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <error.h>
-#include <errno.h>
 
 static struct sockaddr **
 get_if_addrs(int *num_output_ifs, unsigned int required_iff_flags, int include_ipv6, int use_broadaddr) {
@@ -21,7 +19,6 @@ get_if_addrs(int *num_output_ifs, unsigned int required_iff_flags, int include_i
 
     rc = getifaddrs(&ifs);
     if (rc != 0) {
-        error(0, errno, "getifaddrs");
         return NULL;
     }
 
@@ -38,7 +35,6 @@ get_if_addrs(int *num_output_ifs, unsigned int required_iff_flags, int include_i
 
     sockaddrs = malloc(sizeof(struct sockaddr *) * num_input_ifs);
     if (sockaddrs == NULL) {
-        error(0, errno, "malloc");
         goto fail;
     }
     memset(sockaddrs, 0, sizeof(struct sockaddr *) * num_input_ifs);
@@ -54,7 +50,6 @@ get_if_addrs(int *num_output_ifs, unsigned int required_iff_flags, int include_i
                 int socklen = (sa->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6));
                 sockaddrs[num_sockaddrs] = malloc(socklen);
                 if (sockaddrs[num_sockaddrs] == NULL) {
-                    error(0, errno, "malloc");
                     goto fail;
                 }
                 memcpy(sockaddrs[num_sockaddrs], sa, socklen);

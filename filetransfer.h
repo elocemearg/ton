@@ -1,7 +1,7 @@
 #ifndef _TTTFILETRANSFER_H
 #define _TTTFILETRANSFER_H
 
-#include "tttsession.h"
+#include "session.h"
 
 int
 ttt_file_transfer_session(struct ttt_session *sess, int is_sender,
