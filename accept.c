@@ -6,12 +6,18 @@
 #include <fcntl.h>
 #include <assert.h>
 
-#include <sys/types.h>
+#ifdef WINDOWS
+#include <winsock2.h>
+#include <winsock.h>
+#else
 #include <sys/socket.h>
 #include <sys/select.h>
-#include <sys/time.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#endif
+
+#include <sys/types.h>
+#include <sys/time.h>
 
 #include "utils.h"
 #include "accept.h"

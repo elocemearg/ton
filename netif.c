@@ -3,9 +3,14 @@
 #include <ctype.h>
 #include <string.h>
 #include <sys/types.h>
+
+#ifdef WINDOWS
+#include <winsock.h>
+#else
 #include <netinet/in.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#endif
 
 static struct sockaddr **
 get_if_addrs(int *num_output_ifs, unsigned int required_iff_flags, int include_ipv6, int use_broadaddr) {

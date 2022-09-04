@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+
+#ifndef WINDOWS
 #include <arpa/inet.h>
+#endif
 
 #include "protocol.h"
 #include "session.h"

@@ -3,9 +3,14 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include <sys/types.h>
+#ifdef WINDOWS
+#include <winsock.h>
+#else
 #include <sys/socket.h>
 #include <netdb.h>
+#endif
+
+#include <sys/types.h>
 #include <errno.h>
 
 #include <openssl/ssl.h>

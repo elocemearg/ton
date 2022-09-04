@@ -7,7 +7,13 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#ifdef WINDOWS
+#include <winsock.h>
+#else
 #include <sys/socket.h>
+#endif
+
 #include <errno.h>
 #include <netinet/in.h>
 
@@ -38,11 +44,13 @@ ttt_dump_hex(const void *data, size_t length, const char *context) {
     printf("\n");
 }
 
+#ifndef WINDOWS
 /* Don't need to define this on Windows */
 int
 closesocket(int fd) {
     return close(fd);
 }
+#endif
 
 int
 ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
@@ -208,3 +216,18 @@ ttt_size_to_str(long long size, char *dest) {
         }
     }
 }
+
+#ifdef WINDOWS
+void
+sockets_setup() {
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(1, 1), &wsaData) != 0) {
+        fprintf(stderr, "WSAStartup() failed.\n");
+        exit(1);
+    }
+}
+#else
+void
+sockets_setup() {
+}
+#endif

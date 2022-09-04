@@ -4,9 +4,12 @@
 
 #include "tttpush.h"
 #include "tttpull.h"
+#include "utils.h"
 
 int main(int argc, char **argv) {
     char *verb;
+
+    sockets_setup();
 
     if (argc < 2) {
         fprintf(stderr,

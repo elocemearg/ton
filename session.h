@@ -2,7 +2,12 @@
 #define _TTTSESSION_H
 
 #include <sys/types.h>
+
+#ifdef WINDOWS
+#include <winsock.h>
+#else
 #include <sys/socket.h>
+#endif
 
 #include <openssl/ssl.h>
 

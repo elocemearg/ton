@@ -8,10 +8,15 @@
 #include <assert.h>
 
 #include <sys/types.h>
+
+#ifdef WINDOWS
+#include <winsock.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#endif
 
 #include "utils.h"
 #include "netif.h"
