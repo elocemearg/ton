@@ -14,13 +14,15 @@
 enum main_push_longopts {
     PUSH_PASSPHRASE = 256,
     PUSH_DISCOVER_PORT,
-    PUSH_MULTICAST_ADDRESS
+    PUSH_MULTICAST_ADDRESS,
+    PUSH_SEND_FULL_METADATA
 };
 
 static const struct option longopts[] = {
     { "passphrase", 1, NULL, PUSH_PASSPHRASE },
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
     { "multicast-address", 1, NULL, PUSH_MULTICAST_ADDRESS },
+    { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
     { "words", 1, NULL, 'w' },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -42,6 +44,7 @@ print_help(FILE *f) {
 "    --multicast-address <a>  Specify discovery multicast address (default\n"
 "                               %s, puller must use the same)\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
+"    --send-full-metadata     Send full metadata to receiver before transfer\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
@@ -61,6 +64,9 @@ main_push(int argc, char **argv) {
     int verbose = 0;
     struct ttt_session sess;
     int sess_valid = 0;
+    int send_full_metadata = 0;
+    char peer_addr[256] = "";
+    char peer_port[20] = "";
 
     while ((c = getopt_long(argc, argv, "hvw:", longopts, NULL)) != -1) {
         switch (c) {
@@ -77,6 +83,10 @@ main_push(int argc, char **argv) {
 
             case PUSH_MULTICAST_ADDRESS:
                 multicast_address = optarg;
+                break;
+
+            case PUSH_SEND_FULL_METADATA:
+                send_full_metadata = 1;
                 break;
 
             case 'w':
@@ -124,10 +134,12 @@ main_push(int argc, char **argv) {
         if (passphrase == NULL) {
             ttt_error(1, 0, "failed to generate passphrase");
         }
-        fprintf(stderr, "On the destination host, run:\n   ttt pull\nand enter this passphrase:\n");
-        fprintf(stderr, "%s\n", passphrase);
+        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
+        fprintf(stderr, "    %s\n", passphrase);
     }
 
+    /* Discover the other endpoint on our network with our passphrase, and
+     * connect to it. */
     if (ttt_discover_and_connect(multicast_address, discover_port,
                 passphrase, strlen(passphrase), verbose, &sess) == 0) {
         sess_valid = 1;
@@ -137,10 +149,25 @@ main_push(int argc, char **argv) {
         exit_status = 1;
     }
 
-
     if (sess_valid) {
-        exit_status = (ttt_file_transfer_session(&sess, 1, NULL, (const char **) files_to_push, num_files_to_push) != 0);
+        struct ttt_file_transfer ctx;
+
+        /* Announce that we successfully found the other endpoint */
+        if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+            fprintf(stderr, "Established connection.\n");
+        }
+        else {
+            fprintf(stderr, "Established connection to %s.\n", peer_addr);
+        }
+
+        /* Set up the file transfer session as sender */
+        ttt_file_transfer_init_sender(&ctx, (const char **) files_to_push, num_files_to_push);
+        ttt_file_transfer_set_send_full_metadata(&ctx, send_full_metadata);
+
+        /* Run the file transfer session and send our files */
+        exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);
         ttt_session_destroy(&sess);
+        ttt_file_transfer_destroy(&ctx);
     }
 
     free(passphrase);

@@ -17,6 +17,7 @@ enum main_pull_longopts {
     PULL_MULTICAST_TTL,
     PULL_MULTICAST_ADDRESS,
     PULL_PASSPHRASE_WORDS,
+    PULL_CONFIRM_FILE_SET
 };
 
 static const struct option longopts[] = {
@@ -28,6 +29,7 @@ static const struct option longopts[] = {
     { "multicast-address", 1, NULL, PULL_MULTICAST_ADDRESS },
     { "output-dir", 1, NULL, 'o' },
     { "words", 1, NULL, PULL_PASSPHRASE_WORDS },
+    { "confirm", 0, NULL, PULL_CONFIRM_FILE_SET },
 
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -62,6 +64,76 @@ print_help(FILE *f) {
         TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_RENDEZVOUS_ADDR);
 }
 
+static void
+file_mode_to_string(int mode, char *dest) {
+    int mask = 0400;
+    int pos = 0;
+    static const char *mode_letters = "rwx";
+    dest[pos++] = ' ';
+    while (mask != 0) {
+        if (mode & mask) {
+            dest[pos] = mode_letters[(pos - 1) % 3];
+        }
+        else {
+            dest[pos] = '-';
+        }
+        pos++;
+        mask >>= 1;
+    }
+    dest[pos] = '\0';
+}
+
+static int
+request_to_send(void *cookie, const struct ttt_file *files, long file_count,
+        long long total_size) {
+    struct ttt_session *sess = (struct ttt_session *) cookie;
+    FILE *f = stderr;
+    char size_str[12];
+    char line[10];
+    char addr[100];
+    char port[20];
+
+    if (ttt_session_get_peer_addr(sess, addr, sizeof(addr), port, sizeof(port)) < 0) {
+        strcpy(addr, "(unknown)");
+        strcpy(port, "(unknown)");
+    }
+
+    if (files) {
+        int num_files_printed = 0;
+        fprintf(f, "%s is offering the following file(s):\n", addr);
+        for (const struct ttt_file *file = files; file; file = file->next) {
+            char mode_str[12];
+            file_mode_to_string(file->mode, mode_str);
+            ttt_size_to_str(file->size, size_str);
+            fprintf(f, "%10s %6s %s\n", mode_str, size_str, file->ttt_path);
+            if (++num_files_printed >= 10) {
+                fprintf(f, "...\n[%ld other files, not shown]\n", file_count - num_files_printed);
+                break;
+            }
+        }
+        fprintf(f, "\n");
+    }
+    else {
+        fprintf(f, "%s wishes to send some files.\n", addr);
+    }
+    if (file_count >= 0 && total_size >= 0) {
+        ttt_size_to_str(total_size, size_str);
+        fprintf(f, "Total %ld files, %s.\n", file_count, size_str);
+    }
+    fprintf(f, "\n");
+    fprintf(f, "Do you want to continue [Y/n]? ");
+
+    if (fgets(line, 10, stdin) == NULL) {
+        return -1;
+    }
+    else if (line[0] == 'N' || line[0] == 'n') {
+        return -1;
+    }
+    else {
+        return 0;
+    }
+}
+
 int
 main_pull(int argc, char **argv) {
     int c;
@@ -76,6 +148,9 @@ main_pull(int argc, char **argv) {
     int sess_valid = 0;
     int exit_status = 0;
     char *output_dir = ".";
+    int confirm_file_set = 0;
+    char peer_addr[256] = "";
+    char peer_port[20] = "";
 
     while ((c = getopt_long(argc, argv, "ho:v", longopts, NULL)) != -1) {
         switch (c) {
@@ -116,6 +191,10 @@ main_pull(int argc, char **argv) {
                     ttt_error(1, 0, "--multicast-ttl: I'm not going higher than 5");
                 break;
 
+            case PULL_CONFIRM_FILE_SET:
+                confirm_file_set = 1;
+                break;
+
             case 'o':
                 output_dir = optarg;
                 break;
@@ -143,6 +222,8 @@ main_pull(int argc, char **argv) {
         }
     }
 
+    /* Discover the other endpoint with our passphrase, and let them
+     * connect to us. */
     if (ttt_discover_and_accept(multicast_address, discover_port,
                 max_announcements, announcement_interval_ms, multicast_ttl,
                 passphrase, strlen(passphrase), verbose, &sess) == 0) {
@@ -154,8 +235,27 @@ main_pull(int argc, char **argv) {
     }
 
     if (sess_valid) {
-        exit_status = (ttt_file_transfer_session(&sess, 0, output_dir, NULL, 0) != 0);
+        struct ttt_file_transfer ctx;
+
+        /* Announce that we successfully found the other endpoint */
+        if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+            fprintf(stderr, "Established connection.\n");
+        }
+        else {
+            fprintf(stderr, "Established connection from %s.\n", peer_addr);
+        }
+
+        /* Set up the file transfer session as receiver... */
+        ttt_file_transfer_init_receiver(&ctx, output_dir);
+        if (confirm_file_set) {
+            ttt_file_transfer_set_callback_cookie(&ctx, &sess);
+            ttt_file_transfer_set_request_to_send_callback(&ctx, request_to_send);
+        }
+
+        /* Run the file transfer session and receive files. */
+        exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);
         ttt_session_destroy(&sess);
+        ttt_file_transfer_destroy(&ctx);
     }
 
     free(passphrase);

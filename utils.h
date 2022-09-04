@@ -22,4 +22,7 @@ ttt_vfalloc(const char *fmt, va_list ap);
 int
 ttt_mkdir_parents(const char *path, int mode, int parents_only, char dir_sep);
 
+void
+ttt_size_to_str(long long size, char *dest);
+
 #endif

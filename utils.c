@@ -173,3 +173,38 @@ fail:
     return_value = -1;
     goto end;
 }
+
+/* Convert "size", which is a size in bytes, into a human-readable string
+ * such as "4.32MB" and write it to dest.
+ * dest must point to a buffer of at least 7 bytes. */
+void
+ttt_size_to_str(long long size, char *dest) {
+    static const char *power_letters = " KMGTPEZY";
+    if (size < 0) {
+        strcpy(dest, "?");
+    }
+    else if (size < 1024) {
+        sprintf(dest, "%4lld B", size);
+    }
+    else {
+        double d = size;
+        const char *p = power_letters;
+        while (d >= 1024 && p[1]) {
+            d /= 1024;
+            p++;
+        }
+        if (d >= 1024) {
+            /* 1024 yottabytes or more? */
+            strcpy(dest, "huuuuge!");
+        }
+        else if (d >= 100) {
+            snprintf(dest, 7, "%4d%cB", (int) d, *p);
+        }
+        else if (d >= 10) {
+            snprintf(dest, 7, "%4.1f%cB", d, *p);
+        }
+        else {
+            snprintf(dest, 7, "%4.2f%cB", d, *p);
+        }
+    }
+}
