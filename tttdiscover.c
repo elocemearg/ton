@@ -381,9 +381,9 @@ tttdlctx_listen(struct tttdlctx *ctx,
         }
         else {
             struct ttt_discover_result result;
-            ttt_dump_hex(datagram, rc, "received datagram");
+            //ttt_dump_hex(datagram, rc, "received datagram");
             if (validate_datagram(datagram, rc, ctx->secret, ctx->secret_length,
-                        ctx->allow_unencrypted, 1, &result) == 0) {
+                        ctx->allow_unencrypted, 0, &result) == 0) {
                 *invitation_port_r = result.invitation_port;
                 memcpy(peer_addr_r, &peer_addr, addr_len);
                 *peer_addr_length_r = addr_len;
