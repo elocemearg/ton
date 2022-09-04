@@ -159,7 +159,15 @@
  * for this file.
  *
  * TTT_MSG_FILE_DATA_END: the sender has finished sending data for this file.
- * No body.
+ * The body indicates whether the file was sent successfully. If it wasn't,
+ * this is not a fatal error but the receiver should delete the file and
+ * inform the user that this file was not transferred.
+ * Body (minimum 5 bytes):
+ * Offset    Length     Type     Description
+ *      0         4     int32    Error code (see table of error codes). If this
+ *                               is zero the file was transferred successfully.
+ *      4  variable     string   '\0'-terminated string to be shown to the
+ *                               other end's user.
  *
  * TTT_MSG_FILE_SET_END: there are no more files in the set.
  * No body.
@@ -171,7 +179,6 @@
  * the receiver. The end that was the receiver is now the sender.
  * No body.
  * Receiver does not reply - it is now the sender.
- *
  */
 
 /*
@@ -215,15 +222,14 @@
  *
  * Code    Description
  *
- *    0    Success. Not used.
+ *    0    Success.
  *
  *    1    Unrecognised tag. Receiver did not recognise sender's message tag.
- *         This is not necessarily a fatal error - the sender could have sent
- *         a message defined by some future version of this protocol, and this
- *         error tells the sender that the receiver doesn't support the feature.
+ *         This is always a fatal error.
  *
  *    2    Protocol error. Message was too short, or contained invalid
  *         values, or appeared elsewhere than allowed in a message sequence.
+ *         This is always a fatal error.
  *
  *    3    User rejected file set. Receiver received a metadata sequence
  *         but decided it didn't want to receive those files, perhaps because
@@ -244,6 +250,13 @@
 #define TTT_ERR_FILE_SET_REJECTED 3
 #define TTT_ERR_FAILED_TO_WRITE_FILE 4
 #define TTT_ERR_FAILED_TO_READ_FILE 5
+
+/* Errors for which we don't send a "fatal error" message to the other side,
+ * because they've gone away. */
+#define TTT_ERR_CONNECTION_FAILURE -1
+#define TTT_ERR_EOF -2
+#define TTT_ERR_REMOTE_ERROR -3
+#define TTT_ERR_REMOTE_FATAL_ERROR -4
 
 struct ttt_msg {
     int position;

@@ -15,6 +15,11 @@
 #include "protocol.h"
 #include "utils.h"
 
+/* Enable random failures for testing */
+static int ttt_random_file_open_failures = 0;
+static int ttt_random_file_read_failures = 0;
+static int ttt_random_file_write_failures = 0;
+
 #define DIR_SEP_STR "/"
 const char DIR_SEP = DIR_SEP_STR[0];
 
@@ -365,20 +370,16 @@ ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
 
     rc = readall(sess, header, TTT_MSG_HEADER_SIZE);
     if (rc == 0) {
-        return -1;
+        return TTT_ERR_EOF;
     }
     else if (rc < 0) {
         ttt_error(0, 0, "connection interrupted");
-        return -1;
-    }
-    else if (rc < TTT_MSG_HEADER_SIZE) {
-        ttt_error(0, 0, "unexpected EOF during message header");
-        return -1;
+        return TTT_ERR_CONNECTION_FAILURE;
     }
 
     rc = ttt_msg_decode_header(msg, header, &tag, &body_length_bytes, &body_dest);
     if (rc != 0) {
-        return -1;
+        return rc;
     }
 
     if (body_length_bytes > 0) {
@@ -386,11 +387,12 @@ ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
         if (rc != body_length_bytes) {
             if (rc < 0) {
                 ttt_error(0, 0, "connection interrupted");
+                return TTT_ERR_CONNECTION_FAILURE;
             }
             else {
                 ttt_error(0, 0, "unexpected EOF during message body");
+                return TTT_ERR_EOF;
             }
-            return -1;
         }
     }
     return 0;
@@ -427,7 +429,11 @@ ttt_send_message(struct ttt_session *sess, int tag, ...) {
     if (rc != 0)
         return rc;
 
-    return ttt_msg_send(sess, &msg);
+    rc = ttt_msg_send(sess, &msg);
+    if (rc < 0)
+        return -1;
+
+    return 0;
 }
 
 int
@@ -452,17 +458,36 @@ ttt_send_fatal_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     return rc;
 }
 
+static int
+ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *error_format, ...) {
+    int rc;
+
+    if (error_format == NULL) {
+        rc = ttt_send_message(sess, TTT_MSG_FILE_DATA_END, error_code, "");
+    }
+    else {
+        va_list ap;
+        char *message;
+        va_start(ap, error_format);
+        message = ttt_vfalloc(error_format, ap);
+        rc = ttt_send_message(sess, TTT_MSG_FILE_DATA_END, error_code, message);
+        free(message);
+        va_end(ap);
+    }
+
+    return rc;
+}
 
 static int
 ttt_get_next_message(struct ttt_session *sess, struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
     int rc = ttt_msg_recv(sess, msg);
-    if (rc < 0) {
-        return -1;
+    if (rc != 0) {
+        return rc;
     }
     rc = ttt_msg_decode(msg, decoded);
     if (rc != 0) {
         ttt_send_fatal_error(sess, rc, "failed to decode message");
-        return -1;
+        return rc;
     }
     return 0;
 }
@@ -474,8 +499,8 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
     int rc;
 
     rc = ttt_get_next_message(sess, &msg, &decoded);
-    if (rc < 0)
-        return -1;
+    if (rc != 0)
+        return rc;
 
     switch (decoded.tag) {
         case TTT_MSG_OK:
@@ -485,35 +510,58 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
             ttt_error(0, 0, "received %s error from remote host: 0x%08x: %s",
                     decoded.tag == TTT_MSG_FATAL_ERROR ? "fatal" : "",
                     decoded.u.err.code, decoded.u.err.message);
-            return -1;
+            return decoded.tag == TTT_MSG_ERROR ? TTT_ERR_REMOTE_ERROR : TTT_ERR_REMOTE_FATAL_ERROR;
         default:
             ttt_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
-            return -1;
+            return TTT_ERR_PROTOCOL;
     }
 }
-
 
 /* Already within a TTT_MSG_FILE_SET_START/TTT_MSG_FILE_SET_END block, send
  * a TTT_MSG_FILE_METADATA message, data chunks and TTT_MSG_FILE_DATA_END
  * message for the given file.
+ *
+ * Return 0 if we successfully sent the TTT_MSG_FILE_DATA_END message. Note
+ * this does not mean we actually succeeded in sending the complete file, only
+ * that the session is still alive and there was no fatal error
+ *
+ * If we failed to open or send any part of the file, we include the error
+ * information in the TTT_MSG_FILE_DATA_END message we sent to the receiver,
+ * set *file_failed to 1, and return 0. If we successfully send the complete
+ * file, we set *file_failed to 0 and return 0.
+ *
+ * Return <0 if there was a fatal error such as a communication or protocol
+ * error and the session should be aborted.
  */
 int
-ttt_send_file(struct ttt_session *sess, struct ttt_file *f) {
+ttt_send_file(struct ttt_session *sess, struct ttt_file *f, int *file_failed) {
     struct ttt_msg msg;
     FILE *stream;
     size_t bytes_read = 0;
     int return_value = 0;
 
+    *file_failed = 0;
+
+    /* Send a metadata message, so the receiver knows to expect a file. */
+    if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
+        goto fail;
+    }
+
+    /* Open the file we want to send. If this fails, tell the receiver that
+     * there will be no data for this file and that we failed to send it. */
     stream = fopen(f->local_path, "rb");
+    if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
+        fclose(stream);
+        stream = NULL;
+        errno = EPERM;
+    }
     if (stream == NULL) {
         int err = errno;
         ttt_error(0, err, "%s", f->local_path);
-        ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_READ_FILE, "unable to open %s: %s", f->local_path, strerror(err));
-        return -1;
-    }
-
-    if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
-        goto fail;
+        if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
+            goto fail;
+        *file_failed = 1;
+        return 0;
     }
 
     do {
@@ -527,17 +575,27 @@ ttt_send_file(struct ttt_session *sess, struct ttt_file *f) {
         msg_data_dest = ttt_msg_file_data_chunk_data_ptr(&msg);
 
         /* Read up to max_length bytes from the file into the message */
+        errno = 0;
         bytes_read = fread(msg_data_dest, 1, max_length, stream);
+        if (ttt_random_file_read_failures && bytes_read != 0 && rand() % 100 == 0) {
+            bytes_read = 0;
+            errno = EIO;
+        }
         if (bytes_read == 0) {
-            if (ferror(stream)) {
+            if (ferror(stream) || (ttt_random_file_read_failures && errno == EIO)) {
+                /* Error reading from the file. Send a TTT_MSG_FILE_DATA_END
+                 * message with an error code, to tell the receiver this file
+                 * failed to send. The session continues. */
                 int err = errno;
                 ttt_error(0, err, "%s", f->local_path);
-                ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_READ_FILE, "unable to read from %s: %s", f->local_path, strerror(err));
-                goto fail;
+                *file_failed = 1;
+                if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
+                    goto fail;
+                }
             }
             else {
-                /* End of file */
-                if (ttt_send_message(sess, TTT_MSG_FILE_DATA_END) < 0)
+                /* End of file. We read and sent everything successfully. */
+                if (ttt_send_file_data_end(sess, 0, NULL) != 0)
                     goto fail;
             }
         }
@@ -564,10 +622,12 @@ fail:
 
 int
 ttt_file_transfer_session_sender(struct ttt_session *sess,
-        const char **paths_to_push, int num_paths_to_push) {
+        const char **paths_to_push, int num_paths_to_push,
+        long long *total_files_out, long long *num_file_failures_out) {
     struct ttt_file_list file_list;
     int walk_failures = 0;
     int return_value = 0;
+    long long num_file_failures = 0;
     int rc;
 
     if (num_paths_to_push <= 0) {
@@ -596,15 +656,17 @@ ttt_file_transfer_session_sender(struct ttt_session *sess,
     /* Now send a file metadata set message sequence... */
     if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_START) < 0)
         goto fail;
+    *total_files_out = 0;
     for (struct ttt_file *f = file_list.start; f; f = f->next) {
         if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
             goto fail;
         }
+        ++*total_files_out;
     }
     if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_END) < 0)
         goto fail;
 
-    if (ttt_receive_reply_report_error(sess) < 0)
+    if (ttt_receive_reply_report_error(sess) != 0)
         goto fail;
 
     /* Now send a file data set message sequence, in which for each file in
@@ -613,24 +675,32 @@ ttt_file_transfer_session_sender(struct ttt_session *sess,
     if (ttt_send_message(sess, TTT_MSG_FILE_SET_START) < 0)
         goto fail;
     for (struct ttt_file *f = file_list.start; f; f = f->next) {
+        int file_failed = 0;
         if (access(f->local_path, F_OK) != 0 && errno == ENOENT) {
             /* File existed when we walked the directories, but it's gone now.
              * Report this as a non-fatal error. */
             ttt_error(0, 0, "%s no longer exists, not sending it.", f->local_path);
             continue;
         }
-        if (ttt_send_file(sess, f) < 0) {
+        if (ttt_send_file(sess, f, &file_failed) < 0) {
             goto fail;
+        }
+
+        if (file_failed) {
+            /* Session is still running but we couldn't open the file on our
+             * side, so sent a half-hearted apology in lieu of the file. */
+            num_file_failures++;
         }
     }
     if (ttt_send_message(sess, TTT_MSG_FILE_SET_END) < 0)
         goto fail;
 
-    if (ttt_receive_reply_report_error(sess) < 0)
+    if (ttt_receive_reply_report_error(sess) != 0)
         goto fail;
 
 end:
     /* Now we've finished. */
+    *num_file_failures_out = num_file_failures;
     ttt_file_list_destroy(&file_list);
     return return_value;
 
@@ -649,7 +719,7 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
     int received_summary = 0;
 
     do {
-        if (ttt_get_next_message(sess, &msg, &decoded) < 0) {
+        if (ttt_get_next_message(sess, &msg, &decoded) != 0) {
             goto fail;
         }
         if (decoded.tag == TTT_MSG_FILE_METADATA_SUMMARY) {
@@ -775,7 +845,8 @@ timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *
 
 static int
 ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
-        struct ttt_file_list *list, long long file_count, long long total_size) {
+        struct ttt_file_list *list, long long file_count, long long total_size,
+        long long *sender_failed_file_count) {
     struct ttt_msg msg;
     struct ttt_decoded_msg decoded;
     FILE *current_file = NULL;
@@ -786,6 +857,7 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
     long long current_file_size = 0;
     long long total_bytes_received = 0;
     long long files_received = 0;
+    long long files_sender_failed = 0;
     int current_file_mode = 0;
     int return_value = 0;
     struct timeval now, next_progress_report;
@@ -795,7 +867,7 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
     timeval_add(&now, &progress_report_interval, &next_progress_report);
 
     do {
-        if (ttt_get_next_message(sess, &msg, &decoded) < 0) {
+        if (ttt_get_next_message(sess, &msg, &decoded) != 0) {
             goto fail;
         }
         gettimeofday(&now, NULL);
@@ -819,6 +891,12 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
 
             if (S_ISREG(current_file_mode)) {
                 current_file = fopen(local_filename, "wb");
+                if (ttt_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
+                    fclose(current_file);
+                    unlink(local_filename);
+                    current_file = NULL;
+                    errno = EPERM;
+                }
                 if (current_file == NULL && errno == ENOENT) {
                     /* Try to create the directory structure prefixing local_filename */
                     if (ttt_mkdir_parents(local_filename, 0777, 1, DIR_SEP) < 0) {
@@ -849,6 +927,10 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
             }
             if (current_file != NULL) {
                 size_t ret = fwrite(decoded.u.chunk.data, 1, decoded.u.chunk.length, current_file);
+                if (ttt_random_file_write_failures && ret != 0 && rand() % 100 == 0) {
+                    ret = 0;
+                    errno = EIO;
+                }
                 if (ret != decoded.u.chunk.length) {
                     int err = errno;
                     ttt_error(0, err, "failed to write to %s", local_filename);
@@ -866,24 +948,43 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
                 ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_DATA_END but there was no TTT_MSG_FILE_METADATA before it");
                 goto fail;
             }
+
             if (current_file != NULL) {
                 if (fclose(current_file) == EOF) {
+                    /* If we fail to write out a file locally, we treat this
+                     * as a fatal error and abort the session. */
                     int err = errno;
                     ttt_error(0, err, "error on close of %s", local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to flush data to %s: %s", ttt_filename, strerror(err));
+                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ttt_filename, strerror(err));
+
+                    /* Try to delete the file */
+                    unlink(local_filename);
+                    goto fail;
                 }
             }
 
-            /* Set file mode */
-            if (chmod(local_filename, current_file_mode & 0777) < 0) {
-                ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
-            }
+            if (decoded.u.err.code == 0) {
+                /* Sender reports that it sent the file successfully */
+                /* Set file mode */
+                if (chmod(local_filename, current_file_mode & 0777) < 0) {
+                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
+                }
 
-            /* Set file timestamp */
-            timbuf.actime = time(NULL);
-            timbuf.modtime = current_file_mtime;
-            if (utime(local_filename, &timbuf) < 0) {
-                ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                /* Set file timestamp */
+                timbuf.actime = time(NULL);
+                timbuf.modtime = current_file_mtime;
+                if (utime(local_filename, &timbuf) < 0) {
+                    ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                }
+            }
+            else {
+                /* The transfer of this file ended because the sender failed
+                 * to read from or open it. This is not a fatal error, but we
+                 * report and remember it, and delete any partially-transferred
+                 * file. */
+                unlink(local_filename);
+                files_sender_failed++;
+                ttt_error(0, 0, "warning: did not receive %s: %s", local_filename, decoded.u.err.message);
             }
 
             files_received++;
@@ -920,6 +1021,7 @@ ttt_receive_file_set(struct ttt_session *sess, const char *output_dir,
     } while (decoded.tag != TTT_MSG_FILE_SET_END);
 
 end:
+    *sender_failed_file_count = files_sender_failed;
     free(local_filename);
     free(ttt_filename);
     if (current_file)
@@ -932,19 +1034,22 @@ fail:
 }
 
 int
-ttt_file_transfer_session_receiver(struct ttt_session *sess, const char *output_dir) {
+ttt_file_transfer_session_receiver(struct ttt_session *sess,
+        const char *output_dir, long long *file_count_out,
+        long long *sender_failed_file_count_out) {
     struct ttt_file_list list;
     struct ttt_msg msg;
     struct ttt_decoded_msg decoded;
     int return_value = 0;
     int rc;
     long long file_count = -1, total_size = -1;
+    long long sender_failed_file_count = 0;
 
     ttt_file_list_init(&list);
 
     do {
         rc = ttt_get_next_message(sess, &msg, &decoded);
-        if (rc < 0) {
+        if (rc != 0) {
             goto fail;
         }
 
@@ -972,7 +1077,7 @@ ttt_file_transfer_session_receiver(struct ttt_session *sess, const char *output_
 
             case TTT_MSG_FILE_SET_START:
                 /* Receive files and write them to output_dir */
-                rc = ttt_receive_file_set(sess, output_dir, &list, file_count, total_size);
+                rc = ttt_receive_file_set(sess, output_dir, &list, file_count, total_size, &sender_failed_file_count);
                 if (rc < 0)
                     goto fail;
 
@@ -994,10 +1099,16 @@ ttt_file_transfer_session_receiver(struct ttt_session *sess, const char *output_
     } while (decoded.tag != TTT_MSG_SWITCH_ROLES && decoded.tag != TTT_MSG_END_SESSION);
 
 end:
+    if (file_count_out)
+        *file_count_out = file_count;
+    if (sender_failed_file_count_out)
+        *sender_failed_file_count_out = sender_failed_file_count;
+
     ttt_file_list_destroy(&list);
     return return_value;
 
 fail:
+    ttt_error(0, 0, "file transfer failed with fatal error");
     return_value = -1;
     goto end;
 }
@@ -1023,11 +1134,20 @@ ttt_file_transfer_session(struct ttt_session *sess, int is_sender,
     int failed = 0;
 
     while (!finished) {
+        long long total_files_to_send = 0, num_files_failed = 0;
         if (is_sender) {
-            rc = ttt_file_transfer_session_sender(sess, paths_to_push, num_paths_to_push);
+            rc = ttt_file_transfer_session_sender(sess, paths_to_push,
+                    num_paths_to_push, &total_files_to_send, &num_files_failed);
         }
         else {
-            rc = ttt_file_transfer_session_receiver(sess, output_dir);
+            rc = ttt_file_transfer_session_receiver(sess, output_dir,
+                    &total_files_to_send, &num_files_failed);
+        }
+        if (rc == 0 && num_files_failed > 0) {
+            ttt_error(0, 0, "warning: %lld of %lld files were not sent%s",
+                    num_files_failed, total_files_to_send,
+                    is_sender ? " to receiver" : " to us");
+            failed = 1;
         }
 
         if (rc < 0) {

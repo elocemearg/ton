@@ -39,7 +39,7 @@ static struct ttt_msg_def msg_defs[] = {
     { TTT_MSG_FILE_METADATA_SET_END,   "",      0 },
     { TTT_MSG_FILE_SET_START,          "",      0 },
     { TTT_MSG_FILE_DATA_CHUNK,         "*",     0 },
-    { TTT_MSG_FILE_DATA_END,           "",      0 },
+    { TTT_MSG_FILE_DATA_END,           "4s",    5 },
     { TTT_MSG_FILE_SET_END,            "",      0 },
     { TTT_MSG_SWITCH_ROLES,            "",      0 },
     { TTT_MSG_END_SESSION,             "",      0 }
@@ -87,7 +87,7 @@ ttt_msg_decode_header(struct ttt_msg *msg, const void *header, int *tag,
     *body_length_bytes = int32_ntoh(header, 4);
     if (*body_length_bytes < 0 || *body_length_bytes > TTT_MSG_MAX - TTT_MSG_HEADER_SIZE) {
         ttt_error(0, 0, "invalid message header: body length %d", *body_length_bytes);
-        return -1;
+        return TTT_ERR_PROTOCOL;
     }
     *body_dest = msg->data + TTT_MSG_HEADER_SIZE;
     msg->position = TTT_MSG_HEADER_SIZE;
@@ -202,6 +202,7 @@ ttt_msg_decode(struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
     char *str;
     int str_offset = 0;
 
+    decoded->tag = tag;
     def = bsearch(&tag, msg_defs, msg_defs_length, sizeof(msg_defs[0]), msg_defs_tag_cmp);
     if (def == NULL) {
         ttt_error(0, 0, "received message with unrecognised tag %d", tag);
@@ -233,6 +234,7 @@ ttt_msg_decode(struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
 
         case TTT_MSG_ERROR:
         case TTT_MSG_FATAL_ERROR:
+        case TTT_MSG_FILE_DATA_END:
             decoded->u.err.code = int32_ntoh(body, 0);
             decoded->u.err.message = body + 4;
             str_offset = 4;
