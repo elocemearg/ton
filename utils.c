@@ -9,20 +9,24 @@
 #include <sys/stat.h>
 
 #ifdef WINDOWS
+#include <winsock2.h>
 #include <winsock.h>
+#include <ws2ipdef.h> /* for struct sockaddr_in6 */
 #else
 #include <sys/socket.h>
+#include <netinet/in.h>
 #endif
 
 #include <errno.h>
-#include <netinet/in.h>
+
+#include "utils.h"
 
 void
 ttt_dump_hex(const void *data, size_t length, const char *context) {
     const unsigned char *d = (const unsigned char *)data;
 
     printf("%s\n", context);
-    printf("%zd bytes...\n", length);
+    printf("%" PRINTF_INT64 "u bytes...\n", (unsigned long long) length);
     for (size_t pos = 0; pos < length; pos += 16) {
         for (size_t i = 0; i < 16; ++i) {
             if (pos + i >= length)
@@ -89,6 +93,49 @@ ttt_error(int exit_status, int err, const char *format, ...) {
         exit(exit_status);
 }
 
+#ifdef WINDOWS
+void
+ttt_socket_error(int exit_status, const char *format, ...) {
+    va_list ap;
+    int err = WSAGetLastError();
+
+    va_start(ap, format);
+
+    fflush(stdout);
+    fprintf(stderr, "ttt: ");
+    vfprintf(stderr, format, ap);
+    if (err != 0) {
+        fprintf(stderr, ": WSA %d (0x%08x)", err, err);
+    }
+    fprintf(stderr, "   \n");
+
+    va_end(ap);
+
+    if (exit_status != 0)
+        exit(exit_status);
+}
+#else
+void ttt_socket_error(int exit_status, const char *format, ...) {
+    va_list ap;
+    int err = errno;
+
+    va_start(ap, format);
+
+    fflush(stdout);
+    fprintf(stderr, "ttt: ");
+    vfprintf(stderr, format, ap);
+    if (err != 0) {
+        fprintf(stderr, ": %s", strerror(err));
+    }
+    fprintf(stderr, "   \n");
+
+    va_end(ap);
+
+    if (exit_status != 0)
+        exit(exit_status);
+}
+#endif
+
 char *
 ttt_vfalloc(const char *fmt, va_list ap) {
     char *buf;
@@ -130,6 +177,15 @@ ttt_vfalloc(const char *fmt, va_list ap) {
     return buf;
 }
 
+static int
+ttt_mkdir(const char *pathname, int mode) {
+#ifdef WINDOWS
+    return mkdir(pathname);
+#else
+    return mkdir(pathname, mode);
+#endif
+}
+
 int
 ttt_mkdir_parents(const char *pathname_orig, int mode, int parents_only, char dir_sep) {
     size_t pathname_len;
@@ -152,12 +208,12 @@ ttt_mkdir_parents(const char *pathname_orig, int mode, int parents_only, char di
      * /tmp/dest/a.txt we don't try to create "/" */
     for (size_t pos = 1; pos <= pathname_len; pos++) {
         if (pathname[pos] == dir_sep || (!parents_only && pathname[pos] == '\0')) {
-            struct stat st;
+            STAT st;
             /* Does pathname[0 to pos] exist as a directory? */
             pathname[pos] = '\0';
-            if (stat(pathname, &st) < 0 && errno == ENOENT) {
+            if (ttt_stat(pathname, &st) < 0 && errno == ENOENT) {
                 /* Doesn't exist - create it. */
-                if (mkdir(pathname, mode) < 0) {
+                if (ttt_mkdir(pathname, mode) < 0) {
                     goto fail;
                 }
             }
@@ -192,7 +248,7 @@ ttt_size_to_str(long long size, char *dest) {
         strcpy(dest, "?");
     }
     else if (size < 1024) {
-        sprintf(dest, "%4lld B", size);
+        sprintf(dest, "%4d B", (int) size);
     }
     else {
         double d = size;
@@ -219,15 +275,62 @@ ttt_size_to_str(long long size, char *dest) {
 
 #ifdef WINDOWS
 void
-sockets_setup() {
+ttt_sockets_setup() {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(1, 1), &wsaData) != 0) {
         fprintf(stderr, "WSAStartup() failed.\n");
         exit(1);
     }
 }
+
+void
+ttt_sockets_teardown() {
+    WSACleanup();
+}
 #else
 void
-sockets_setup() {
+ttt_sockets_setup() {
+}
+
+void
+ttt_sockets_teardown() {
+}
+#endif
+
+#ifdef WINDOWS
+int
+ttt_make_socket_blocking(int sock) {
+    u_long mode = 0;
+    if (ioctlsocket(sock, FIONBIO, &mode) != NO_ERROR)
+        return -1;
+    return 0;
+}
+
+int
+ttt_make_socket_non_blocking(int sock) {
+    u_long mode = 1;
+    if (ioctlsocket(sock, FIONBIO, &mode) != NO_ERROR)
+        return -1;
+    return 0;
+}
+#else
+#include <unistd.h>
+#include <fcntl.h>
+int
+ttt_make_socket_blocking(int sock) {
+    int flags = fcntl(sock, F_GETFL, 0);
+    flags &= ~O_NONBLOCK;
+    if (fcntl(sock, F_SETFL, flags) < 0)
+        return -1;
+    return 0;
+}
+
+int
+ttt_make_socket_non_blocking(int sock) {
+    int flags = fcntl(sock, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    if (fcntl(sock, F_SETFL, flags) < 0)
+        return -1;
+    return 0;
 }
 #endif

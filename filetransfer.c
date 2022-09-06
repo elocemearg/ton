@@ -15,6 +15,12 @@
 #include "protocol.h"
 #include "utils.h"
 
+#ifdef NAME_MAX
+#define MAX_PATH_COMPONENT_LEN NAME_MAX
+#else
+#define MAX_PATH_COMPONENT_LEN 256
+#endif
+
 /* Enable random failures for testing */
 static int ttt_random_file_open_failures = 0;
 static int ttt_random_file_read_failures = 0;
@@ -43,6 +49,19 @@ join_paths(const char *path1, const char *path2, char *dest) {
     sprintf(dest, "%s%s%s", path1, add_sep ? DIR_SEP_STR : "", path2);
 }
 
+#ifdef WINDOWS
+static int
+ends_with_icase(const char *path, const char *ending) {
+    size_t len = strlen(path);
+    if (len < strlen(ending))
+        return 0;
+    if (!strcasecmp(path + len - strlen(ending), ending))
+        return 1;
+    else
+        return 0;
+}
+#endif
+
 
 /* Recursively search the directory named in "path", calling callback for each
  * file found. If "path" is a file not a directory, we just call callback once
@@ -54,13 +73,12 @@ join_paths(const char *path1, const char *path2, char *dest) {
  * if there was a fatal error. */
 static int
 ttt_dir_walk_aux(const char *path, const char *initial_path,
-        int (*callback)(void *cookie, const char *file_path, struct stat *st,
+        int (*callback)(void *cookie, const char *file_path, STAT *st,
             const char *initial_path),
         void *cookie) {
-    struct stat st;
     int ret = 0;
-
-    if (lstat(path, &st) < 0) {
+    STAT st;
+    if (ttt_stat(path, &st) < 0) {
         ttt_error(0, errno, "%s", path);
         return 1;
     }
@@ -76,7 +94,7 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
             return 1;
         }
 
-        new_path = malloc(strlen(path) + 1 + NAME_MAX + 1);
+        new_path = malloc(strlen(path) + 1 + MAX_PATH_COMPONENT_LEN + 1);
         if (new_path == NULL) {
             ttt_error(0, errno, "malloc");
             ret = -1;
@@ -87,7 +105,11 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
 
             if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
                 continue;
-            if (strlen(ent->d_name) > NAME_MAX) {
+#ifdef WINDOWS
+            if (ends_with_icase(ent->d_name, ".lnk"))
+                continue;
+#endif
+            if (strlen(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
                 ttt_error(0, 0, "can't open %s/%s: subdirectory name too long", path, ent->d_name);
                 ret = 1;
                 continue;
@@ -122,12 +144,12 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
     /* Don't bother with special files such as symlinks (yet), sockets,
      * device files, etc. */
 
-    return 0;
+    return ret;
 }
 
 static int
 ttt_dir_walk(const char *path,
-        int (*callback)(void *cookie, const char *file_path, struct stat *st,
+        int (*callback)(void *cookie, const char *file_path, STAT *st,
             const char *initial_path),
         void *cookie) {
     return ttt_dir_walk_aux(path, path, callback, cookie);
@@ -261,7 +283,7 @@ fail:
 }
 
 static int
-add_local_file_to_list(void *cookie, const char *path, struct stat *st, const char *initial_path) {
+add_local_file_to_list(void *cookie, const char *path, STAT *st, const char *initial_path) {
     struct ttt_file_list *list = (struct ttt_file_list *) cookie;
     struct ttt_file *file = NULL;
 
@@ -864,7 +886,7 @@ ttt_update_progress(const char *current_filename,
     }
 
     ttt_size_to_str(total_bytes_received, bytes_received_str);
-    fprintf(stderr, "%6lld/%lld %s%-*s | %6s",
+    fprintf(stderr, "%6" PRINTF_INT64 "d/%" PRINTF_INT64 "d %s%-*s | %6s",
             files_received, file_count,
             filename_trimmed ? "..." : "",
             filename_limit - (filename_trimmed ? 3 : 0), display_filename,
@@ -1055,14 +1077,14 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Sender reports that it sent the file successfully.
                  * Set the file's mode and timestamp according to the metadata
                  * message we received before the file data. */
-                if (chmod(local_filename, current_file_mode & 0777) < 0) {
-                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
-                }
-
                 timbuf.actime = time(NULL);
                 timbuf.modtime = current_file_mtime;
                 if (utime(local_filename, &timbuf) < 0) {
                     ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                }
+
+                if (chmod(local_filename, current_file_mode & 0777) < 0) {
+                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
                 }
             }
             else {

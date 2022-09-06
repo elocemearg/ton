@@ -3,7 +3,6 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <assert.h>
 
 #ifdef WINDOWS
@@ -87,8 +86,11 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
     int rc;
     char port_str[20];
     struct addrinfo hints;
+#ifdef WINDOWS
+    const BOOL one = 1;
+#else
     const int one = 1;
-    int flags;
+#endif
     struct sockaddr_storage addr;
     socklen_t addrlen;
 
@@ -96,8 +98,17 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
     ctx->listen_socket = -1;
     ctx->use_tls = use_tls;
 
+    /* We only listen on IPv4 (AF_INET) here, because on Windows if we set
+     * this to AF_UNSPEC we get an IPv6-only listen socket, which isn't much
+     * use if the other end tries to connect using IPv4.
+     *
+     * Perhaps we need two listening sockets listening on two different
+     * invitation ports, one IPv4, and one IPv6? Announcement datagrams can
+     * contain the port number appropriate to the address family used for
+     * the datagram.
+     * */
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
@@ -115,39 +126,37 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
             ctx->listen_addrinfo->ai_protocol);
     
     if (ctx->listen_socket < 0) {
-        ttt_error(0, errno, "tttacctx_init: socket");
+        ttt_socket_error(0, "tttacctx_init: socket");
         goto fail;
     }
 
-    rc = setsockopt(ctx->listen_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    rc = setsockopt(ctx->listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
     if (rc != 0) {
-        ttt_error(0, errno, "tttacctx_init: setsockopt");
+        ttt_socket_error(0, "tttacctx_init: setsockopt");
         goto fail;
     }
 
     /* Make the listening socket non-blocking, and bind it to the listen
      * address and port. */
-    flags = fcntl(ctx->listen_socket, F_GETFL, 0);
-    flags |= O_NONBLOCK;
-    fcntl(ctx->listen_socket, F_SETFL, flags);
+    ttt_make_socket_non_blocking(ctx->listen_socket);
 
     rc = bind(ctx->listen_socket, ctx->listen_addrinfo->ai_addr,
             ctx->listen_addrinfo->ai_addrlen);
     if (rc != 0) {
-        ttt_error(0, errno, "tttacctx_init: bind");
+        ttt_socket_error(0, "tttacctx_init: bind");
         goto fail;
     }
 
     rc = listen(ctx->listen_socket, 10);
     if (rc != 0) {
-        ttt_error(0, errno, "tttacctx_init: listen");
+        ttt_socket_error(0, "tttacctx_init: listen");
         goto fail;
     }
 
     addrlen = sizeof(addr);
     rc = getsockname(ctx->listen_socket, (struct sockaddr *) &addr, &addrlen);
     if (rc != 0) {
-        ttt_error(0, errno, "tttacctx_init: getsockname");
+        ttt_socket_error(0, "tttacctx_init: getsockname");
         goto fail;
     }
 
@@ -248,7 +257,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         }
         else if (rc < 0) {
             /* Failure */
-            ttt_error(0, errno, "select");
+            ttt_socket_error(0, "select");
             return rc;
         }
         else {
@@ -264,20 +273,20 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
                      * list of candidate sessions. */
                     struct ttt_session *s = tttacctx_add_session(ctx, new_socket, (struct sockaddr *) &addr, addr_len);
                     if (s != NULL) {
-                        int flags;
                         /* Add this to both fdsets so that we try to handshake
                          * with this session below. */
                         s->want_read = 1;
                         s->want_write = 1;
                         FD_SET(s->sock, &readsockets);
                         FD_SET(s->sock, &writesockets);
-                        flags = fcntl(new_socket, F_GETFL, 0);
-                        flags |= O_NONBLOCK;
-                        fcntl(new_socket, F_SETFL, flags);
+                        ttt_make_socket_non_blocking(new_socket);
                     }
                     else {
                         closesocket(new_socket);
                     }
+                }
+                else {
+                    ttt_socket_error(0, "accept");
                 }
             }
 

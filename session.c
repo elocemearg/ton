@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 #ifdef WINDOWS
+#include <winsock2.h>
 #include <winsock.h>
 #else
 #include <sys/socket.h>
@@ -61,10 +61,7 @@ ttt_session_plain_read(struct ttt_session *s, void *dest, size_t len) {
 
 static int
 ttt_session_plain_make_blocking(struct ttt_session *s) {
-    int flags = fcntl(s->sock, F_GETFL, 0);
-    flags &= ~O_NONBLOCK;
-    fcntl(s->sock, F_SETFL, flags);
-    return 0;
+    return ttt_make_socket_blocking(s->sock);
 }
 
 static int
@@ -194,10 +191,7 @@ ttt_session_tls_destroy(struct ttt_session *s) {
 
 static int
 ttt_session_tls_make_blocking(struct ttt_session *s) {
-    int flags = fcntl(s->sock, F_GETFL, 0);
-    flags &= ~O_NONBLOCK;
-    fcntl(s->sock, F_SETFL, flags);
-    return 0;
+    return ttt_make_socket_blocking(s->sock);
 }
 
 static int
@@ -409,14 +403,14 @@ ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
 
     sock = socket(addr->sa_family, SOCK_STREAM, 0);
     if (sock < 0) {
-        ttt_error(0, errno, "socket");
+        ttt_socket_error(0, "socket");
         rc = -1;
     }
 
     if (rc == 0) {
         rc = connect(sock, addr, addr_len);
         if (rc != 0) {
-            ttt_error(0, errno, "connect");
+            ttt_socket_error(0, "connect");
         }
     }
 

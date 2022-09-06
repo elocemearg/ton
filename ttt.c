@@ -8,8 +8,9 @@
 
 int main(int argc, char **argv) {
     char *verb;
+    int ret = 0;
 
-    sockets_setup();
+    ttt_sockets_setup();
 
     if (argc < 2) {
         fprintf(stderr,
@@ -22,13 +23,17 @@ int main(int argc, char **argv) {
 
     verb = argv[1];
     if (!strcmp(verb, "push")) {
-        return main_push(argc - 1, argv + 1);
+        ret = main_push(argc - 1, argv + 1);
     }
     else if (!strcmp(verb, "pull")) {
-        return main_pull(argc - 1, argv + 1);
+        ret = main_pull(argc - 1, argv + 1);
     }
     else {
         fprintf(stderr, "Unknown command %s\nTry \"ttt push\" or \"ttt pull\".\n", verb);
+        ret = 1;
     }
-    return 1;
+
+    ttt_sockets_teardown();
+
+    return ret;
 }

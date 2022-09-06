@@ -1,14 +1,15 @@
 #ifndef _TTTSESSION_H
 #define _TTTSESSION_H
 
-#include <sys/types.h>
-
 #ifdef WINDOWS
+#include <winsock2.h>
 #include <winsock.h>
+#include <ws2tcpip.h> /* for socklen_t */
 #else
 #include <sys/socket.h>
 #endif
 
+#include <sys/types.h>
 #include <openssl/ssl.h>
 
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing

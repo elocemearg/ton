@@ -10,6 +10,7 @@
 #include <sys/types.h>
 
 #ifdef WINDOWS
+#include <winsock2.h>
 #include <winsock.h>
 #else
 #include <sys/socket.h>
@@ -325,7 +326,11 @@ tttdlctx_listen(struct tttdlctx *ctx,
     struct addrinfo *addrinfo = NULL;
     char port_str[20];
     int listener = -1;
+#ifdef WINDOWS
+    const BOOL one = 1;
+#else
     const int one = 1;
+#endif
     int discovered = 0;
     struct sockaddr **multicast_if_addrs = NULL;
     int num_multicast_if_addrs = 0;
@@ -339,24 +344,24 @@ tttdlctx_listen(struct tttdlctx *ctx,
 
     rc = getaddrinfo(NULL, port_str, &hints, &addrinfo);
     if (rc != 0) {
-        ttt_error(0, errno, "discover_listen: getaddrinfo");
+        ttt_error(0, 0, "discover_listen: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
     listener = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol);
     if (listener < 0) {
-        ttt_error(0, errno, "discover_listen: socket");
+        ttt_socket_error(0, "discover_listen: socket");
         goto fail;
     }
 
-    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) {
-        ttt_error(0, errno, "discover_listen: setsockopt");
+    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one)) != 0) {
+        ttt_socket_error(0, "discover_listen: setsockopt");
         goto fail;
     }
 
     rc = bind(listener, addrinfo->ai_addr, addrinfo->ai_addrlen);
     if (rc != 0) {
-        ttt_error(0, errno, "discover_listen: bind");
+        ttt_socket_error(0, "discover_listen: bind");
         goto fail;
     }
 
@@ -374,7 +379,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
             group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
             group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
             if (setsockopt(listener, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *) &group, sizeof(group)) != 0) {
-                ttt_error(0, errno, "discover_listen: setsockopt IP_ADD_MEMBERSHIP");
+                ttt_socket_error(0, "discover_listen: setsockopt IP_ADD_MEMBERSHIP");
                 goto fail;
             }
         }
@@ -386,7 +391,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
         socklen_t addr_len = sizeof(peer_addr);
         rc = recvfrom(listener, datagram, sizeof(datagram), 0, (struct sockaddr *) &peer_addr, &addr_len);
         if (rc < 0) {
-            ttt_error(0, errno, "discover_listen: recvfrom");
+            ttt_socket_error(0, "discover_listen: recvfrom");
         }
         else {
             struct ttt_discover_result result;
@@ -430,16 +435,16 @@ make_dgram_addr_info(const char *multicast_rendezvous_addr, PORT announce_port, 
     snprintf(port_str, sizeof(port_str), "%hu", announce_port);
     rc = getaddrinfo(multicast_rendezvous_addr, port_str, &hints, res);
     if (rc != 0) {
-        ttt_error(0, errno, "discover_announce: getaddrinfo multicast");
+        ttt_error(0, 0, "discover_announce: getaddrinfo multicast: %s", gai_strerror(rc));
         return -1;
     }
     return 0;
 }
 
 int
-tttdactx_init(struct tttdactx *ctx,
-        const char *secret, size_t secret_length) {
+tttdactx_init(struct tttdactx *ctx, const char *secret, size_t secret_length) {
     int rc;
+    int num_failed_sockets = 0;
 
     memset(ctx, 0, sizeof(*ctx));
 
@@ -494,20 +499,24 @@ tttdactx_init(struct tttdactx *ctx,
      * followed by num_multicast_if_addrs sockets to multicast on. */
 
     for (int i = 0; i < ctx->num_sockets; i++) {
+#ifdef WINDOWS
+        const BOOL one = 1;
+#else
         const int one = 1;
+#endif
         const int multicast_ttl = 1;
         struct sockaddr *sa = (i < ctx->num_broadcast_if_addrs) ? ctx->broadcast_if_addrs[i] : ctx->multicast_if_addrs[i - ctx->num_broadcast_if_addrs];
         ctx->sockets[i] = socket(sa->sa_family, SOCK_DGRAM, 0);
         if (ctx->sockets[i] < 0) {
-            ttt_error(0, errno, "socket");
+            ttt_socket_error(0, "socket");
             goto fail;
         }
         if (i < ctx->num_broadcast_if_addrs) {
             /* Set up this socket for broadcast, and fill in the port number
              * of the struct sockaddr. */
-            rc = setsockopt(ctx->sockets[i], SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+            rc = setsockopt(ctx->sockets[i], SOL_SOCKET, SO_BROADCAST, (const char *) &one, sizeof(one));
             if (rc < 0) {
-                ttt_error(0, errno, "discover_announce: setsockopt SO_BROADCAST");
+                ttt_socket_error(0, "discover_announce: setsockopt SO_BROADCAST");
                 goto fail;
             }
 
@@ -526,16 +535,27 @@ tttdactx_init(struct tttdactx *ctx,
             struct sockaddr_in *sin;
             assert(sa->sa_family == AF_INET);
             sin = (struct sockaddr_in *) sa;
-            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_IF, &sin->sin_addr, sizeof(sin->sin_addr));
+            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_IF, (const char *) &sin->sin_addr, sizeof(sin->sin_addr));
             if (rc != 0) {
-                ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_IF");
-                goto fail;
+                /* Failed to enable this socket for multicast traffic,
+                 * perhaps because it's a localhost or link-local address.
+                 * This isn't a fatal error unless there are no more
+                 * sockets. */
+                closesocket(ctx->sockets[i]);
+                ctx->sockets[i] = -1;
+                num_failed_sockets++;
+                if (num_failed_sockets >= ctx->num_sockets) {
+                    ttt_socket_error(0, "Failed to enable multicast on %d interface(s) and no more interfaces available... setsockopt IP_MULTICAST_IF", num_failed_sockets);
+                    goto fail;
+                }
             }
-
-            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &multicast_ttl, sizeof(multicast_ttl));
-            if (rc != 0) {
-                ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
-                goto fail;
+            else {
+                if (multicast_ttl != 1) {
+                    rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicast_ttl, sizeof(multicast_ttl));
+                    if (rc != 0) {
+                        ttt_socket_error(0, "discover_announce: setsockopt IP_MULTICAST_TTL");
+                    }
+                }
             }
         }
     }
@@ -590,9 +610,11 @@ tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr) {
 void
 tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl) {
     for (int i = ctx->num_broadcast_if_addrs; i < ctx->num_sockets; i++) {
-        int rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
-        if (rc != 0) {
-            ttt_error(0, errno, "discover_announce: setsockopt IP_MULTICAST_TTL");
+        if (ctx->sockets[i] >= 0) {
+            int rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &ttl, sizeof(ttl));
+            if (rc != 0) {
+                ttt_socket_error(0, "discover_announce: setsockopt IP_MULTICAST_TTL");
+            }
         }
     }
 }
@@ -633,6 +655,13 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
         ssize_t bytes_sent;
         struct sockaddr *sa;
         int sa_len;
+
+        /* Skip sockets which failed setup in some way */
+        if (ctx->sockets[si] < 0) {
+            num_sockets_failed++;
+            continue;
+        }
+
         if (si < ctx->num_broadcast_if_addrs) {
             sa = ctx->broadcast_if_addrs[si];
             if (sa->sa_family == AF_INET)
@@ -649,7 +678,7 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
 
         bytes_sent = sendto(ctx->sockets[si], datagram, datagram_length, 0, sa, sa_len);
         if (bytes_sent < 0) {
-            ttt_error(0, errno, "discover_announce: sendto");
+            ttt_socket_error(0, "discover_announce: sendto");
             num_sockets_failed++;
         }
         else if (bytes_sent < datagram_length) {

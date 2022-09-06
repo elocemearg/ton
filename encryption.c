@@ -6,7 +6,10 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 #include <errno.h>
+
+#ifdef UNIX
 #include <termios.h>
+#endif
 
 #include "wordlist.h"
 #include "utils.h"
@@ -220,11 +223,14 @@ ttt_prompt_passphrase(const char *prompt) {
     int c;
     int buf_size = 80;
     int buf_pos = 0;
-    struct termios t;
     char *buf = malloc(buf_size);
+#ifdef UNIX
+    struct termios t;
+#endif
 
     fprintf(stderr, "%s", prompt);
 
+#ifdef UNIX
     /* Switch off terminal echo */
     if (tcgetattr(0, &t) < 0) {
         ttt_error(0, errno, "tcgetattr");
@@ -235,6 +241,7 @@ ttt_prompt_passphrase(const char *prompt) {
         ttt_error(0, errno, "tcsetattr");
         goto fail;
     }
+#endif
 
     /* Read a single line */
     while ((c = fgetc(stdin)) != '\n' && c != EOF) {
@@ -253,12 +260,14 @@ ttt_prompt_passphrase(const char *prompt) {
     buf[buf_pos] = '\0';
 
 end:
+#ifdef UNIX
     /* Switch terminal echo back on */
     t.c_lflag |= ECHO;
     if (tcsetattr(0, TCSANOW, &t) < 0) {
         ttt_error(0, errno, "tcsetattr");
         goto fail;
     }
+#endif
 
     /* Echo the newline */
     putchar('\n');
