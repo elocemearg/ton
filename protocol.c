@@ -57,7 +57,7 @@ int32_ntoh(const unsigned char *buf, int offset) {
 static int64_t
 int64_ntoh(const unsigned char *buf, int offset) {
     return (int64_t) (
-            ((uint64_t) ntohl(((uint64_t) *(const uint32_t *)(buf + offset)) << 32)) |
+            (((uint64_t) ntohl(*(const uint32_t *)(buf + offset))) << 32) |
             ((uint64_t) ntohl(((uint64_t) *(const uint32_t *)(buf + offset + 4))))
     );
 }
