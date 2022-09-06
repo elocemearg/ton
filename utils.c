@@ -265,6 +265,29 @@ ttt_size_to_str(long long size, char *dest) {
 }
 
 #ifdef WINDOWS
+int
+ttt_chmod(const char *path, int unix_mode) {
+    /* Translate the Unix-style chmod mode bits into what's required by the
+     * Windows _chmod call, which only supports one read and write bit.
+     * Take those from the owner-readable and owner-writable bits of
+     * unix_mode. */
+    int windows_mode_bits = 0;
+    if (unix_mode & 0400) {
+        windows_mode_bits |= _S_IREAD;
+    }
+    if (unix_mode & 0200) {
+        windows_mode_bits |= _S_IWRITE;
+    }
+    return _chmod(path, windows_mode_bits);
+}
+#else
+int
+ttt_chmod(const char *path, mode_t mode) {
+    return chmod(path, mode);
+}
+#endif
+
+#ifdef WINDOWS
 void
 ttt_sockets_setup() {
     WSADATA wsaData;

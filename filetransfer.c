@@ -1087,7 +1087,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
                 }
 
-                if (chmod(local_filename, current_file_mode & 0777) < 0) {
+                if (ttt_chmod(local_filename, current_file_mode & 0777) < 0) {
                     ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
                 }
             }

@@ -53,6 +53,14 @@ ttt_mkdir_parents(const char *path, int mode, int parents_only, char dir_sep);
 void
 ttt_size_to_str(long long size, char *dest);
 
+#ifdef WINDOWS
+int
+ttt_chmod(const char *path, int unix_mode);
+#else
+int
+ttt_chmod(const char *path, mode_t mode);
+#endif
+
 void
 ttt_sockets_setup();
 
