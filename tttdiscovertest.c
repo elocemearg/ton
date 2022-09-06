@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
         }
 
         rc = ttt_discover_and_connect(NULL, discover_port, secret,
-                strlen(secret), 1, &sess);
+                strlen(secret), 1, NULL, NULL, NULL, NULL, &sess);
         if (rc < 0) {
             ttt_error(1, 0, "failed to discover and connect to remote host");
         }

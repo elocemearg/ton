@@ -12,6 +12,7 @@
 #include <winsock2.h>
 #include <winsock.h>
 #include <ws2ipdef.h> /* for struct sockaddr_in6 */
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -74,23 +75,24 @@ ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
 }
 
 void
-ttt_error(int exit_status, int err, const char *format, ...) {
-    va_list ap;
-
-    va_start(ap, format);
-
+ttt_verror(int exit_status, const char *errstr, const char *format, va_list ap) {
     fflush(stdout);
     fprintf(stderr, "ttt: ");
     vfprintf(stderr, format, ap);
-    if (err != 0) {
-        fprintf(stderr, ": %s", strerror(err));
+    if (errstr != NULL) {
+        fprintf(stderr, ": %s", errstr);
     }
-    fprintf(stderr, "   \n");
-
-    va_end(ap);
-
+    fprintf(stderr, "    \n");
     if (exit_status != 0)
         exit(exit_status);
+}
+
+void
+ttt_error(int exit_status, int err, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    ttt_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
+    va_end(ap);
 }
 
 #ifdef WINDOWS
@@ -98,41 +100,30 @@ void
 ttt_socket_error(int exit_status, const char *format, ...) {
     va_list ap;
     int err = WSAGetLastError();
+    char errstr[256] = "";
+    int rc;
+
+    rc = FormatMessageA(
+            FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            errstr, sizeof(errstr), NULL
+    );
+    errstr[sizeof(errstr) - 1] = '\0';
+    if (rc == 0) {
+        snprintf(errstr, sizeof(errstr), "Winsock error %d", err);
+    }
 
     va_start(ap, format);
-
-    fflush(stdout);
-    fprintf(stderr, "ttt: ");
-    vfprintf(stderr, format, ap);
-    if (err != 0) {
-        fprintf(stderr, ": WSA %d (0x%08x)", err, err);
-    }
-    fprintf(stderr, "   \n");
-
+    ttt_verror(exit_status, errstr, format, ap);
     va_end(ap);
-
-    if (exit_status != 0)
-        exit(exit_status);
 }
 #else
 void ttt_socket_error(int exit_status, const char *format, ...) {
     va_list ap;
     int err = errno;
-
     va_start(ap, format);
-
-    fflush(stdout);
-    fprintf(stderr, "ttt: ");
-    vfprintf(stderr, format, ap);
-    if (err != 0) {
-        fprintf(stderr, ": %s", strerror(err));
-    }
-    fprintf(stderr, "   \n");
-
+    ttt_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
     va_end(ap);
-
-    if (exit_status != 0)
-        exit(exit_status);
 }
 #endif
 

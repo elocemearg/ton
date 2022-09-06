@@ -5,6 +5,16 @@
 #include <unistd.h>
 #include <errno.h>
 
+#ifdef WINDOWS
+#include <winsock2.h>
+#include <winsock.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#endif
+
 #include "encryption.h"
 #include "utils.h"
 #include "session.h"
@@ -51,6 +61,42 @@ print_help(FILE *f) {
         TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_RENDEZVOUS_ADDR);
 }
 
+static void
+listening_callback(void *cookie) {
+    if (cookie != NULL) {
+        /* Tell the user what passphrase we generated, now that everything
+         * else is set up. If we generated the passphrase rather than having
+         * it specified by the user, then we asked ttt_discover_and_connect to
+         * pass our passphrase as the cookie. */
+        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
+        fprintf(stderr, "    %s\n", (char *) cookie);
+    }
+    fprintf(stderr, "\nWaiting for announcement from the destination...\n");
+}
+
+static void
+received_announcement_callback(void *cookie, const struct sockaddr *addr,
+        socklen_t addr_len, int valid, int invitation_port) {
+    int verbose = *(int *) cookie;
+    char peer_addr_str[256] = "?";
+    char peer_port_str[20] = "?";
+    int rc = 0;
+
+    if (valid || verbose) {
+        rc = getnameinfo(addr, addr_len, peer_addr_str, sizeof(peer_addr_str),
+                peer_port_str, sizeof(peer_port_str), NI_NUMERICHOST | NI_NUMERICSERV);
+        if (rc != 0) {
+            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+        }
+    }
+    if (valid) {
+        fprintf(stderr, "Found %s, invitation port %d\n", peer_addr_str, invitation_port);
+    }
+    else if (verbose) {
+        fprintf(stderr, "Rejected message from %s\n", peer_addr_str);
+    }
+}
+
 int
 main_push(int argc, char **argv) {
     int c;
@@ -67,6 +113,7 @@ main_push(int argc, char **argv) {
     int send_full_metadata = 0;
     char peer_addr[256] = "";
     char peer_port[20] = "";
+    int generated_passphrase = 0;
 
     while ((c = getopt_long(argc, argv, "hvw:", longopts, NULL)) != -1) {
         switch (c) {
@@ -134,14 +181,15 @@ main_push(int argc, char **argv) {
         if (passphrase == NULL) {
             ttt_error(1, 0, "failed to generate passphrase");
         }
-        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
-        fprintf(stderr, "    %s\n", passphrase);
+        generated_passphrase = 1;
     }
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
     if (ttt_discover_and_connect(multicast_address, discover_port,
-                passphrase, strlen(passphrase), verbose, &sess) == 0) {
+                passphrase, strlen(passphrase), verbose,
+                listening_callback, generated_passphrase ? passphrase : NULL,
+                received_announcement_callback, &verbose, &sess) == 0) {
         sess_valid = 1;
     }
     else {
@@ -157,7 +205,7 @@ main_push(int argc, char **argv) {
             fprintf(stderr, "Established connection.\n");
         }
         else {
-            fprintf(stderr, "Established connection to %s.\n", peer_addr);
+            fprintf(stderr, "Established connection to %s port %s.\n", peer_addr, peer_port);
         }
 
         /* Set up the file transfer session as sender */

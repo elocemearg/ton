@@ -186,12 +186,13 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     else {
         payload_length = ttt_aes_256_cbc_decrypt(enc_payload_start, enc_payload_length, payload, sizeof(payload), secret, secret_length);
         if (payload_length < 0) {
-            ttt_error(0, 0, "validate_datagram: ttt_aes_256_cbc_decrypt() failed");
+            if (verbose)
+                ttt_error(0, 0, "validate_datagram: announcement not encrypted with expected passphrase");
             return -1;
         }
     }
 
-    if (verbose) {
+    if (verbose > 1) {
         ttt_dump_hex(payload, payload_length, "decrypted payload");
     }
 
@@ -289,6 +290,12 @@ tttdlctx_init(struct tttdlctx *ctx,
     ctx->multicast_rendezvous_addr = strdup(TTT_MULTICAST_RENDEZVOUS_ADDR);
     ctx->allow_unencrypted = 0;
     ctx->listen_port = TTT_DEFAULT_DISCOVER_PORT;
+    ctx->listening_cb = NULL;
+    ctx->listening_cb_cookie = NULL;
+    ctx->announcement_cb = NULL;
+    ctx->announcement_cb_cookie = NULL;
+    ctx->verbose = 0;
+
     return 0;
 
 fail:
@@ -315,6 +322,31 @@ void
 tttdlctx_destroy(struct tttdlctx *ctx) {
     free(ctx->secret);
     free(ctx->multicast_rendezvous_addr);
+}
+
+void
+tttdlctx_set_listening_callback(struct tttdlctx *ctx, tttdl_listening_cb listening_cb) {
+    ctx->listening_cb = listening_cb;
+}
+
+void
+tttdlctx_set_listening_callback_cookie(struct tttdlctx *ctx, void *cookie) {
+    ctx->listening_cb_cookie = cookie;
+}
+
+void
+tttdlctx_set_announcement_callback(struct tttdlctx *ctx, tttdl_announcement_cb announcement_cb) {
+    ctx->announcement_cb = announcement_cb;
+}
+
+void
+tttdlctx_set_announcement_callback_cookie(struct tttdlctx *ctx, void *cookie) {
+    ctx->announcement_cb_cookie = cookie;
+}
+
+void
+tttdlctx_set_verbose(struct tttdlctx *ctx, int value) {
+    ctx->verbose = value;
 }
 
 int
@@ -401,6 +433,12 @@ tttdlctx_listen(struct tttdlctx *ctx,
         goto fail;
     }
 
+    if (ctx->listening_cb) {
+        /* Call the callback to say that we set everything up correctly and
+         * we're now listening for announcements via UDP */
+        ctx->listening_cb(ctx->listening_cb_cookie);
+    }
+
     do {
         char datagram[512];
         struct sockaddr_storage peer_addr;
@@ -413,11 +451,19 @@ tttdlctx_listen(struct tttdlctx *ctx,
             struct ttt_discover_result result;
             //ttt_dump_hex(datagram, rc, "received datagram");
             if (validate_datagram(datagram, rc, ctx->secret, ctx->secret_length,
-                        ctx->allow_unencrypted, 0, &result) == 0) {
+                        ctx->allow_unencrypted, ctx->verbose, &result) == 0) {
                 *invitation_port_r = result.invitation_port;
                 memcpy(peer_addr_r, &peer_addr, addr_len);
                 *peer_addr_length_r = addr_len;
                 discovered = 1;
+            }
+            if (ctx->announcement_cb != NULL) {
+                /* Inform our caller that we got a valid or invalid
+                 * announcement... */
+                ctx->announcement_cb(ctx->announcement_cb_cookie,
+                        (const struct sockaddr *) &peer_addr,
+                        addr_len, discovered,
+                        discovered ? result.invitation_port : 0);
             }
         }
     } while (!discovered);
@@ -714,14 +760,14 @@ fail:
 int
 ttt_discover_and_connect(const char *multicast_address, int discover_port,
         const char *passphrase, size_t passphrase_length, int verbose,
+        tttdl_listening_cb listening_cb, void *listening_callback_cookie,
+        tttdl_announcement_cb announcement_cb, void *announcement_callback_cookie,
         struct ttt_session *new_sess) {
     struct tttdlctx ctx;
     int ctx_valid = 0;
     struct sockaddr_storage peer_addr;
     int peer_addr_len = sizeof(peer_addr);
     PORT peer_invitation_port;
-    char peer_addr_str[100];
-    char peer_port_str[30];
     const int use_tls = 1;
     int rc;
 
@@ -742,6 +788,12 @@ ttt_discover_and_connect(const char *multicast_address, int discover_port,
         tttdlctx_set_multicast_addr(&ctx, multicast_address);
     }
 
+    tttdlctx_set_listening_callback(&ctx, listening_cb);
+    tttdlctx_set_listening_callback_cookie(&ctx, listening_callback_cookie);
+    tttdlctx_set_announcement_callback(&ctx, announcement_cb);
+    tttdlctx_set_announcement_callback_cookie(&ctx, announcement_callback_cookie);
+    tttdlctx_set_verbose(&ctx, verbose);
+
     /* Listen until we receive a valid UDP datagram which was encrypted
      * with our secret. This datagram, when decrypted, tells us which
      * port to make a TCP connection to. */
@@ -751,19 +803,6 @@ ttt_discover_and_connect(const char *multicast_address, int discover_port,
         goto fail;
     }
 
-    if (verbose) {
-        /* Look up who sent us a valid announcement and report to the user. */
-        rc = getnameinfo((struct sockaddr *) &peer_addr, sizeof(peer_addr),
-                peer_addr_str, sizeof(peer_addr_str),
-                peer_port_str, sizeof(peer_port_str),
-                NI_NUMERICHOST | NI_NUMERICSERV);
-        if (rc != 0) {
-            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
-        }
-        else {
-            fprintf(stderr, "Discovered: %s port %s, invitation port %hu\n", peer_addr_str, peer_port_str, peer_invitation_port);
-        }
-    }
     tttdlctx_destroy(&ctx);
     ctx_valid = 0;
 

@@ -13,6 +13,14 @@
 
 typedef uint16_t PORT;
 
+/* Callback function which tttdlctx_listen will call to say it's successfully
+ * set things up and is now waiting for announcements. */
+typedef void (*tttdl_listening_cb)(void *);
+
+/* Callback to tell the caller when we receive an announcement datagram,
+ * valid or not */
+typedef void (*tttdl_announcement_cb)(void *, const struct sockaddr *, socklen_t, int valid, int invitation_port);
+
 /* TTT discovery listen context */
 struct tttdlctx {
     /* Address in the 239.x.x.x range which we subscribe to for
@@ -29,6 +37,20 @@ struct tttdlctx {
     /* If this is zero (the default) then we ignore datagrams which are not
      * encrypted. */
     int allow_unencrypted;
+
+    /* tttdlctx_listen() calls listening_cb() when it has set up a socket which
+     * is waiting to receive announcement packets over UDP. */
+    tttdl_listening_cb listening_cb;
+    void *listening_cb_cookie;
+
+    /* tttdlctx_listen() calls announcement_cb() whenever it receives an
+     * announcement datagram, and passes details of where it came from and
+     * whether it was valid. */
+    tttdl_announcement_cb announcement_cb;
+    void *announcement_cb_cookie;
+
+    /* If set, we write to stderr when we reject an announcement datagram. */
+    int verbose;
 };
 
 /* TTT discovery announce context */
@@ -92,11 +114,28 @@ tttdlctx_listen(struct tttdlctx *ctx,
         PORT *invitation_port_r);
 
 void
+tttdlctx_set_listening_cb(struct tttdlctx *ctx, tttdl_listening_cb listening_cb);
+
+void
+tttdlctx_set_listening_callback_cookie(struct tttdlctx *ctx, void *cookie);
+
+void
+tttdlctx_set_announcement_callback(struct tttdlctx *ctx, tttdl_announcement_cb announcement_cb);
+
+void
+tttdlctx_set_announcement_callback_cookie(struct tttdlctx *ctx, void *cookie);
+
+void
+tttdlctx_set_verbose(struct tttdlctx *ctx, int value);
+
+void
 tttdlctx_destroy(struct tttdlctx *ctx);
 
 int
 ttt_discover_and_connect(const char *multicast_address, int discover_port,
         const char *passphrase, size_t passphrase_length, int verbose,
+        tttdl_listening_cb listening_cb, void *callback_cookie,
+        tttdl_announcement_cb announcement_cb, void *announcement_callback_cookie,
         struct ttt_session *new_sess);
 
 int
