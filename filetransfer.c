@@ -26,7 +26,11 @@ static int ttt_random_file_open_failures = 0;
 static int ttt_random_file_read_failures = 0;
 static int ttt_random_file_write_failures = 0;
 
+#ifdef WINDOWS
+#define DIR_SEP_STR "\\"
+#else
 #define DIR_SEP_STR "/"
+#endif
 const char DIR_SEP = DIR_SEP_STR[0];
 
 #define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
