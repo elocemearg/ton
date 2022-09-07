@@ -472,7 +472,25 @@ tttdlctx_listen(struct tttdlctx *ctx,
         rc = 0;
     else
         rc = -1;
+
 end:
+    if (listener >= 0) {
+        for (int i = 0; i < num_multicast_if_addrs; i++) {
+            /* Unsubscribe this process from receiving multicast packets. */
+            struct sockaddr *sa = multicast_if_addrs[i];
+            if (sa->sa_family == AF_INET) {
+                /* Go through every multicast-enabled interface and tell it to
+                 * listen for multicast messages to multicast_rendezvous_addr.
+                 * This might not work on some interfaces, but we soldier on
+                 * unless they all fail. */
+                struct ip_mreq group;
+                group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
+                group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
+                setsockopt(listener, IPPROTO_IP, IP_DROP_MEMBERSHIP, (char *) &group, sizeof(group));
+            }
+        }
+    }
+
     if (addrinfo)
         freeaddrinfo(addrinfo);
     if (listener >= 0)

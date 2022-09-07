@@ -1,3 +1,6 @@
+/* Code for doing the actual file transfer once a session (struct ttt_session)
+ * has been established. This code sends messages defined in protocol.c. */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,11 +24,14 @@
 #define MAX_PATH_COMPONENT_LEN 256
 #endif
 
-/* Enable random failures for testing */
-static int ttt_random_file_open_failures = 0;
-static int ttt_random_file_read_failures = 0;
-static int ttt_random_file_write_failures = 0;
-
+/* DIR_SEP_STR and DIR_SEP is the directory separator we have to use in
+ * pathnames passed to OS calls. On Windows it's a backslash and on everything
+ * else it's a slash.
+ *
+ * This is distinct from the directory separator we use in pathnames in
+ * protocol messages we send such as TTT_MSG_FILE_METADATA. This is always
+ * a slash.
+ */
 #ifdef WINDOWS
 #define DIR_SEP_STR "\\"
 #else
@@ -33,9 +39,18 @@ static int ttt_random_file_write_failures = 0;
 #endif
 const char DIR_SEP = DIR_SEP_STR[0];
 
+/* Enable random failures for testing */
+static int ttt_random_file_open_failures = 0;
+static int ttt_random_file_read_failures = 0;
+static int ttt_random_file_write_failures = 0;
+
+/* Return 1 if struct timeval X is later than struct timeval Y */
 #define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
 
-/* dest must point to at least strlen(path1) + strlen(path2) + 2 bytes */
+/* Join two path fragments together, inserting DIR_SEP between them if there
+ * is no DIR_SEP at the end of path1 nor the start of path2. Write the joined
+ * path to dest.
+ * dest must point to at least strlen(path1) + strlen(path2) + 2 bytes. */
 static void
 join_paths(const char *path1, const char *path2, char *dest) {
     /* Decide whether we need to put a directory separator between these */
@@ -54,6 +69,8 @@ join_paths(const char *path1, const char *path2, char *dest) {
 }
 
 #ifdef WINDOWS
+/* Windows only: determine whether a path ends with a given ending,
+ * case-insensitively. */
 static int
 ends_with_icase(const char *path, const char *ending) {
     size_t len = strlen(path);
@@ -67,14 +84,6 @@ ends_with_icase(const char *path, const char *ending) {
 #endif
 
 
-/* Recursively search the directory named in "path", calling callback for each
- * file found. If "path" is a file not a directory, we just call callback once
- * for that file.
- * initial_path is the path supplied to the top-level call to ttt_dir_walk().
- * The callback should return 0 normally, or -1 to terminate the walk with
- * an error.
- * Return value is 0 on success, 1 if some files could not be statted, or -1
- * if there was a fatal error. */
 static int
 ttt_dir_walk_aux(const char *path, const char *initial_path,
         int (*callback)(void *cookie, const char *file_path, STAT *st,
@@ -151,6 +160,28 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
     return ret;
 }
 
+/* Recursively search the directory named in "path", calling callback for each
+ * file found. If "path" is a file not a directory, we just call callback once
+ * for that file.
+ * This may be useful to the callback function to derive a relative path from
+ * the initial path to an individual file.
+ *
+ * The callback is called once for every file we find.
+ * The callback should return 0 normally, or -1 to terminate the walk with
+ * an error. Its parameters are:
+ *     void *cookie
+ *         The cookie argument to ttt_dir_walk_aux. This has meaning
+ *         only to the callback.
+ *     char *file_path
+ *         The path to the file we found. This always contains initial_path
+ *         at its start.
+ *     STAT *st
+ *         File metadata in the form of a struct stat or struct __stat64.
+ *     char *initial_path
+ *         The path supplied to the top-level call to ttt_dir_walk.
+ *
+ * Return value is 0 on success, 1 if some files could not be statted, or -1
+ * if there was a fatal error. */
 static int
 ttt_dir_walk(const char *path,
         int (*callback)(void *cookie, const char *file_path, STAT *st,
@@ -160,6 +191,19 @@ ttt_dir_walk(const char *path,
 }
 
 /*
+ * Convert an operating system pathname (path) into a TTT path suitable for
+ * sending in a file transfer session.
+ *
+ * The returned TTT path:
+ *     * is relative to initial_path if that is a directory, otherwise it is
+ *       relative to the directory containing the file named in initial_path,
+ *     * has directory components separated by slash ('/') regardless of what
+ *       the local operating system's directory separator is, and
+ *     * does not begin with a slash.
+ *
+ * The returned path is allocated by malloc() and it is the caller's
+ * responsibility to free() it.
+ *
  * ("alpha/bravo/charlie/delta.txt", "alpha/bravo") => "charlie/delta.txt"
  * ("./alpha/bravo/charlie.txt", ".") => "alpha/bravo/charlie.txt"
  * ("alpha/bravo.txt", "alpha") => "bravo.txt"
@@ -202,7 +246,22 @@ local_path_to_ttt_path(const char *path, const char *initial_path) {
     return ttt_path;
 }
 
-/* ("alpha/bravo/charlie.txt", "/home/fred") => "/home/fred/alpha/bravo/charlie.txt"
+/* Convert a path received over a TTT file transfer session to a local
+ * path name. It is the opposite of local_path_to_ttt_path().
+ *
+ * path: the TTT path to convert, which must use slashes as delimiters and
+ *       not begin with a slash.
+ * local_base_dir: the local directory name to prepend to the converted path.
+ *
+ * The returned path is <local_base_dir><DIR_SEP><path>, except that we don't
+ * add DIR_SEP if local_base_dir already ends with DIR_SEP. Any slashes in
+ * path are translated into the local directory separator DIR_SEP when copying
+ * to the returned string.
+ *
+ * The returned string is created by malloc() and it is the caller's
+ * responsibility to free() it.
+ *
+ * ("alpha/bravo/charlie.txt", "/home/fred") => "/home/fred/alpha/bravo/charlie.txt"
  * ("alpha.txt", "/home/fred/") => "/home/fred/alpha.txt"
  * ("alpha/bravo.txt", "/home/fred///") => "/home/fred///alpha/bravo.txt"
  * ("alpha/bravo.txt", ".") => "./alpha/bravo.txt"
@@ -225,6 +284,8 @@ ttt_path_to_local_path(const char *path, const char *local_base_dir) {
     }
     return new_path;
 }
+
+/* Functions to create and destroy ttt_file and ttt_file_list objects... */
 
 static void
 ttt_file_free(struct ttt_file *file) {
@@ -250,6 +311,17 @@ ttt_file_list_destroy(struct ttt_file_list *list) {
     list->last = NULL;
 }
 
+/* Allocate a new struct ttt_file with the given attributes. Either local_path
+ * or ttt_path may be NULL.
+ *
+ * local_path: the pathname of this file as our OS knows it.
+ * ttt_path: the pathname of this file as we would refer to it in a
+ *           TTT_MSG_FILE_METADATA message to a remote host.
+ * mtime: the modified-time of the file, which is a Unix timestamp (seconds
+ *        since 1970-01-01 00:00:00).
+ * mode: the Unix-style mode bits for the file.
+ * size: the size of the file, in bytes. -1 if not known.
+ */
 static struct ttt_file *
 ttt_file_new(const char *local_path, const char *ttt_path, time_t mtime,
         int mode, long long size) {
@@ -286,6 +358,9 @@ fail:
     return NULL;
 }
 
+/* ttt_dir_walk() callback function used by ttt_file_transfer_session_sender().
+ * Adds a ttt_file object for the named file to a list (=cookie), deriving
+ * the ttt_file object's ttt_path fields from path and initial_path. */
 static int
 add_local_file_to_list(void *cookie, const char *path, STAT *st, const char *initial_path) {
     struct ttt_file_list *list = (struct ttt_file_list *) cookie;
@@ -315,6 +390,9 @@ add_local_file_to_list(void *cookie, const char *path, STAT *st, const char *ini
     return 0;
 }
 
+/* Add a ttt_file with the given properties to the list. This takes a ttt_name
+ * as might be received from a remote TTT host.
+ * Derive the local_path attribute by the ttt_name given and local_base_dir. */
 static int
 add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
         int mode, const char *ttt_name, const char *local_base_dir) {
@@ -344,6 +422,9 @@ add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
     return 0;
 }
 
+/* Read a fixed number of bytes from a ttt_session into buf, blocking until
+ * we've received exactly that many bytes.
+ * Return the number of bytes read if successful, or <=0 on failure. */
 static int
 readall(struct ttt_session *sess, void *buf, int length) {
     size_t bytes_read = 0;
@@ -359,6 +440,9 @@ readall(struct ttt_session *sess, void *buf, int length) {
     return bytes_read;
 }
 
+/* Receive a file transfer session message from sess, blocking until we've
+ * received the complete message. Put the message in *msg.
+ * Return 0 on success or nonzero on error. */
 static int
 ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
     unsigned char header[TTT_MSG_HEADER_SIZE];
@@ -366,6 +450,7 @@ ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
     int tag, body_length_bytes;
     void *body_dest;
 
+    /* Read the header, and fail if that can't be done. */
     rc = readall(sess, header, TTT_MSG_HEADER_SIZE);
     if (rc == 0) {
         ttt_error(0, 0, "connection terminated");
@@ -376,11 +461,15 @@ ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
         return TTT_ERR_CONNECTION_FAILURE;
     }
 
+    /* Hopefully the header is valid... */
     rc = ttt_msg_decode_header(msg, header, &tag, &body_length_bytes, &body_dest);
     if (rc != 0) {
         return rc;
     }
 
+    /* If it is valid, and there is a message body, read the body into
+     * body_dest and msg will then contain a complete TTT file transfer
+     * session message. */
     if (body_length_bytes > 0) {
         rc = readall(sess, body_dest, body_length_bytes);
         if (rc != body_length_bytes) {
@@ -397,6 +486,9 @@ ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
     return 0;
 }
 
+/* Send a ttt_msg on the given ttt_session.
+ * Return the number of bytes sent on success (this will always be greater
+ * than 0) or -1 on failure. */
 static int
 ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
     size_t bytes_sent = 0;
@@ -415,6 +507,22 @@ ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
     return bytes_sent;
 }
 
+/* Construct a TTT message of the given type and send it on the given
+ * ttt_session.
+ * The arguments after "tag" depend on the value of "tag", and they must be
+ * correct according to msg_defs in protocol.c or undefined behaviour occurs.
+ *
+ * For example:
+ *    ttt_send_message(sess, TTT_MSG_FILE_METADATA, (long long) size, (time_t) mtime, (int) mode, (char *) filename);
+ *    ttt_send_message(sess, TTT_MSG_ERROR, TTT_ERR_PROTOCOL, "expected message, received rotting fish");
+ *    ttt_send_message(sess, TTT_MSG_FILE_SET_END);
+ *
+ * This function cannot be used to send messages of type
+ * TTT_MSG_FILE_DATA_CHUNK. These must be built using the
+ * ttt_msg_file_data_chunk_* functions defined in protocol.c.
+ *
+ * Return 0 on success or nonzero on failure.
+ */
 static int
 ttt_send_message(struct ttt_session *sess, int tag, ...) {
     struct ttt_msg msg;
@@ -435,11 +543,15 @@ ttt_send_message(struct ttt_session *sess, int tag, ...) {
     return 0;
 }
 
+/* Send an OK message in reply to a message sequence sent by file transfer's
+ * sender end. */
 static int
 ttt_reply_ok(struct ttt_session *sess) {
     return ttt_send_message(sess, TTT_MSG_OK);
 }
 
+/* Send a TTT_MSG_FATAL_ERROR message with the given code and string.
+ * fmt is a printf-style format string, and its arguments should follow. */
 static int
 ttt_send_fatal_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     va_list ap;
@@ -457,6 +569,8 @@ ttt_send_fatal_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     return rc;
 }
 
+/* Send a TTT_MSG_ERROR message with the given code and string.
+ * fmt is a printf-style format string, and its arguments should follow. */
 static int
 ttt_reply_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     va_list ap;
@@ -474,6 +588,15 @@ ttt_reply_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     return rc;
 }
 
+/* Send a TTT_MSG_FILE_DATA_END message, to tell the receiver there are no
+ * more data chunks (or simply no data chunks) for the file we're sending.
+ *
+ * If error_code is 0, it indicates the file was sent correctly. Otherwise,
+ * it indicates there was an error and the receiver should discard the file.
+ * Set error_format to NULL if error_code == 0.
+ *
+ * error_format and its following printf-style arguments build the error
+ * message which will be sent to the receiver and displayed to its user. */
 static int
 ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *error_format, ...) {
     int rc;
@@ -494,6 +617,15 @@ ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *err
     return rc;
 }
 
+/* Receive a TTT protocol message on ttt_session, decode it, place the
+ * message's encoded form in *msg and its decoded form in *decoded.
+ * "decoded" may contain pointers to character strings in "msg", so decoded is
+ * only valid for as long as the memory in msg remains valid.
+ *
+ * Return 0 if we received a valid message, or nonzero if there was a
+ * communication error or we received a message we couldn't decode or which
+ * was in some way invalid.
+ */
 static int
 ttt_get_next_message(struct ttt_session *sess, struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
     int rc = ttt_msg_recv(sess, msg);
@@ -508,6 +640,17 @@ ttt_get_next_message(struct ttt_session *sess, struct ttt_msg *msg, struct ttt_d
     return 0;
 }
 
+/* Called by the sender end of a TTT file transfer session to receive a reply
+ * to a message sequence. The reply should be TTT_MSG_OK, TTT_MSG_ERROR or
+ * TTT_MSG_FATAL_ERROR.
+ *
+ * Return 0 if we got TTT_MSG_OK.
+ * Return TTT_MSG_ERROR or TTT_MSG_FATAL_ERROR as appropriate if we got
+ * either of those, and call ttt_error() to report the error's code and
+ * message.
+ * Return some other nonzero value if there was a communication error or we
+ * received an invalid response.
+ */
 static int
 ttt_receive_reply_report_error(struct ttt_session *sess) {
     struct ttt_msg msg;
@@ -533,6 +676,7 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
     }
 }
 
+/* Add two struct timevals and put the result in *dest. */
 static void
 timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *dest) {
     dest->tv_sec = t1->tv_sec + t2->tv_sec;
@@ -541,6 +685,9 @@ timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *
     dest->tv_usec %= 1000000;
 }
 
+/* Call the progress report callback in ctx and update
+ * ctx->next_progress_report to the expected time of the next progress report.
+ */
 static void
 make_progress_report(struct ttt_file_transfer *ctx, int is_sender,
         const char *filename, long file_number, long file_count,
@@ -556,6 +703,9 @@ make_progress_report(struct ttt_file_transfer *ctx, int is_sender,
     }
 }
 
+/* Return 1 if ctx->progress is set and it's time to print a progress report
+ * (that is, at least ctx->progress_report_interval has elapsed since the
+ * last one). Return 0 otherwise. */
 static int
 is_progress_report_due(struct ttt_file_transfer *ctx) {
     if (ctx->progress) {
@@ -580,6 +730,17 @@ is_progress_report_due(struct ttt_file_transfer *ctx) {
  * information in the TTT_MSG_FILE_DATA_END message we sent to the receiver,
  * set *file_failed to 1, and return 0. If we successfully send the complete
  * file, we set *file_failed to 0 and return 0.
+ *
+ * We update *bytes_sent_so_far according to the number of bytes from the
+ * file we sent.
+ *
+ * If we stopped early due to a failure to read the file, we decrease
+ * *total_size by the number of bytes of the file we failed to send (according
+ * to the size of the file given in f), and we set *file_failed to 1.
+ *
+ * file_number, file_count, *bytes_sent_so_far, *total_size and
+ * num_files_skipped are used to update the progress indicator if
+ * necessary.
  *
  * Return <0 if there was a fatal error such as a communication or protocol
  * error and the session should be aborted.
@@ -619,6 +780,8 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         return 0;
     }
 
+    /* Now read the whole file in ttt_msg-sized chunks, and send them to
+     * the receiver. */
     do {
         void *msg_data_dest;
         int max_length;
@@ -637,6 +800,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             errno = EIO;
         }
         if (bytes_read == 0) {
+            /* End of file or error... */
             if (ferror(stream) || (ttt_random_file_read_failures && errno == EIO)) {
                 /* Error reading from the file. Send a TTT_MSG_FILE_DATA_END
                  * message with an error code, to tell the receiver this file
@@ -667,11 +831,15 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             *bytes_sent_so_far += bytes_read;
         }
 
+        /* Update the progress indicator if necessary */
         if (is_progress_report_due(ctx)) {
             make_progress_report(ctx, 1, f->local_path, file_number,
                     file_count, file_position, f->size, *bytes_sent_so_far,
                     *total_size, num_files_skipped, 0);
         }
+
+        /* Keep going until we reach the end of the file or we fail to
+         * read some of it. */
     } while (bytes_read > 0);
 
 end:
@@ -685,6 +853,13 @@ fail:
     goto end;
 }
 
+/* Play the "sender" role in a TTT file transfer session set up in ctx. The
+ * other end of the ttt_session sess should be playing the "receiver" role at
+ * the same time or things aren't going to go well.
+ *
+ * On return, set *total_files_out to the number of files we sent, and
+ * *num_file_failures_out to the number of files we wanted to send but
+ * couldn't. */
 static int
 ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
         struct ttt_session *sess, long long *total_files_out,
@@ -723,13 +898,14 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
     }
 
     /* Now send a file metadata set message sequence. We send either a
-     * metadata mesage for each file, or just a total file and byte count,
+     * metadata message for each file, or just a total file and byte count,
      * depending on whether ctx->send_full_metadata is set. */
     if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_START) < 0)
         goto fail;
     total_files = 0;
     for (struct ttt_file *f = file_list.start; f; f = f->next) {
         if (ctx->send_full_metadata) {
+            /* Send a metadata description for every file */
             if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
                 goto fail;
             }
@@ -743,12 +919,18 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             goto fail;
         }
     }
+
+    /* Tell the receiver that's the end of the metadata */
     if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_END) < 0)
         goto fail;
 
+    /* Get a reply from the receiver. The receiver might decide to refuse the
+     * file set based on the metadata we've sent (there might not be enough
+     * disk space available for the size we've reported, for example). */
     rc = ttt_receive_reply_report_error(sess);
     if (rc == 0) {
-        /* Now send a file data set message sequence, in which for each file in
+        /* Receiver agrees to receive the files, so we can start.
+         * Now send a file data set message sequence, in which for each file in
          * file_list, we send a metadata message and the file's data broken up
          * into data chunks... */
         if (ttt_send_message(sess, TTT_MSG_FILE_SET_START) < 0)
@@ -756,12 +938,15 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
         for (struct ttt_file *f = file_list.start; f; f = f->next) {
             int file_failed = 0;
             if (access(f->local_path, F_OK) != 0 && errno == ENOENT) {
-                /* File existed when we walked the directories, but it's gone now.
-                 * Report this as a non-fatal error. */
+                /* File existed when we walked the directories, but it's gone
+                 * now. Report this as a non-fatal error. */
                 ttt_error(0, 0, "%s no longer exists, not sending it.", f->local_path);
+                num_file_failures++;
                 continue;
             }
             file_number++;
+
+            /* Send file f to the receiver. */
             if (ttt_send_file(ctx, sess, file_number, total_files,
                         &progress_bytes_sent_so_far, &progress_total_size,
                         num_file_failures, f, &file_failed) < 0) {
@@ -811,6 +996,22 @@ fail:
     goto end;
 }
 
+/* Called by the side playing the Receiver role.
+ * Having already received a TTT_MSG_FILE_METADATA_START, receive the file
+ * metadata and the TTT_MSG_FILE_METADATA_END message.
+ * If the received file metadata contains a list of files the sender wants to
+ * send us, add them to list, setting the local_path attribute of each
+ * ttt_file object by appending the path to output_dir.
+ * Otherwise, the received file metadata will contain only a summary containing
+ * the file count and total size.
+ *
+ * *file_count_out and *total_size_out are set to the file count and total
+ * size, regardless of whether we got a summary or the full list. Either value
+ * may be -1 if the sender does not know or does not care to tell us how many
+ * files there are or how big they are.
+ *
+ * Return 0 on success or nonzero on failure.
+ */
 static int
 ttt_receive_file_metadata_set(struct ttt_session *sess,
         const char *output_dir, struct ttt_file_list *list,
@@ -825,11 +1026,13 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
             goto fail;
         }
         if (decoded.tag == TTT_MSG_FILE_METADATA_SUMMARY) {
+            /* Summary only */
             file_count = decoded.u.metadata_summary.file_count;
             total_size = decoded.u.metadata_summary.total_size;
             received_summary = 1;
         }
         else if (decoded.tag == TTT_MSG_FILE_METADATA) {
+            /* Full list of files */
             int rc = add_ttt_file_to_list(list, decoded.u.metadata.size,
                     decoded.u.metadata.mtime, decoded.u.metadata.mode,
                     decoded.u.metadata.name, output_dir);
@@ -864,6 +1067,8 @@ fail:
     return -1;
 }
 
+/* Write a progress counter to stderr showing how far we are through the
+ * file transfer. */
 static void
 ttt_update_progress(const char *current_filename,
         long long files_received, long long file_count,
@@ -905,6 +1110,7 @@ ttt_update_progress(const char *current_filename,
     }
 }
 
+/* Default progress callback for a struct ttt_file_transfer object. */
 static void
 default_progress_callback(void *callback_cookie, int is_sender,
             const char *filename, long file_number, long total_files,
@@ -927,6 +1133,27 @@ default_progress_callback(void *callback_cookie, int is_sender,
     }
 }
 
+/* Called by the endpoint playing the Receiver role.
+ *
+ * Having already received a TTT_MSG_FILE_SET_START message on the session
+ * "sess", receive all the files the sender sends us and write them out under
+ * ctx->output_dir, until we receive a TTT_MSG_FILE_SET_END message.
+ *
+ * list, file_count and total_size are all received from the metadata section
+ * which the sender should have sent us immediately before. file_count and
+ * total_size are only used to update the progress indicator.
+ *
+ * This function doesn't use list, but maybe we might at some point.
+ *
+ * If the sender starts sending a file (i.e. it sends us the
+ * TTT_MSG_FILE_METADATA message it has to send before sending the data
+ * chunks), but then it encounters an error reading the file, it tells us
+ * via an error code in the TTT_MSG_FILE_DATA_END message and we increment
+ * *sender_failed_file_count each time this happens.
+ *
+ * Return 0 on success (even if the sender failed to send some files) or
+ * nonzero if we hit some unrecoverable error such as the session falling
+ * apart. */
 static int
 ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         struct ttt_file_list *list, long long file_count, long long total_size,
@@ -959,6 +1186,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         gettimeofday(&now, NULL);
 
         if (decoded.tag == TTT_MSG_FILE_METADATA) {
+            /* Metadata message which precedes a new file */
             if (in_file_transfer) {
                 ttt_error(0, 0, "TTT_MSG_FILE_METADATA tag received out of sequence!");
                 ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_METADATA tag but didn't end previous file %s", ttt_filename);
@@ -1001,7 +1229,9 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     errno = EPERM;
                 }
                 if (current_file == NULL && errno == ENOENT) {
-                    /* Try to create the directory structure prefixing local_filename */
+                    /* We failed to create the file because one or more of its
+                     * parent directories don't exist. Try to create the
+                     * directory structure prefixing local_filename... */
                     if (ttt_mkdir_parents(local_filename, 0777, 1, DIR_SEP) < 0) {
                         int err = errno;
                         ttt_error(0, err, "failed to create directory for %s", local_filename);
@@ -1009,7 +1239,10 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                         goto fail;
                     }
 
-                    /* Try to open the file again... */
+                    /* ... and try to open the file again. If we fail again,
+                     * report the error to our user and just ignore the
+                     * file's data which the sender is going to send us
+                     * anyway. */
                     current_file = fopen(local_filename, "wb");
                     if (current_file == NULL) {
                         ttt_error(0, errno, "skipping %s: failed to open for writing", local_filename);
@@ -1032,7 +1265,8 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             }
 
             /* current_file may be NULL if for some reason we don't want
-             * to save this file. */
+             * to save this file (for example, we couldn't open it on our
+             * end for writing). */
             if (current_file != NULL) {
                 size_t ret = fwrite(decoded.u.chunk.data, 1, decoded.u.chunk.length, current_file);
                 if (ttt_random_file_write_failures && ret != 0 && rand() % 100 == 0) {
@@ -1040,6 +1274,10 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     errno = EIO;
                 }
                 if (ret != decoded.u.chunk.length) {
+                    /* Failing to write to a file we've already opened is a
+                     * fatal error and we don't try to recover from that.
+                     * Perhaps instead we could just report the error to our
+                     * user and ignore the rest of the data for this file? */
                     int err = errno;
                     ttt_error(0, err, "failed to write to %s", local_filename);
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", ttt_filename, strerror(err));
@@ -1051,18 +1289,20 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             total_bytes_received += decoded.u.chunk.length;
         }
         else if (decoded.tag == TTT_MSG_FILE_DATA_END) {
+            /* End of the data for this file. If the error code in this message
+             * is zero, we have the complete file, otherwise the sender is
+             * telling us there's been a problem. Either way, we want to
+             * close our current file. */
             struct utimbuf timbuf;
             if (!in_file_transfer) {
+                /* TTT_MSG_FILE_DATA_END sent at the wrong point! */
                 ttt_error(0, 0, "TTT_MSG_FILE_DATA_END sent without TTT_MSG_FILE_METADATA!");
                 ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_DATA_END but there was no TTT_MSG_FILE_METADATA before it");
                 goto fail;
             }
 
-            /* End of the data for this file. If the error code in this message
-             * is zero, we have the complete file, otherwise the sender is
-             * telling us there's been a problem. Either way, we want to
-             * close our current file. */
             if (current_file != NULL) {
+                /* Try to close the file and fatal error if we can't. */
                 if (fclose(current_file) == EOF) {
                     /* If we fail to write out a file locally, we treat this
                      * as a fatal error and abort the session. */
@@ -1113,7 +1353,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             goto fail;
         }
         else if (decoded.tag == TTT_MSG_FILE_SET_END) {
-            /* There are no more files. We'll exit the loop here. */
+            /* There are no more files. Exit the loop on this iteration. */
             if (in_file_transfer) {
                 ttt_error(0, 0, "received unexpected TTT_MSG_FILE_SET_END but current file still open");
                 ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_SET_END during file send but there was no TTT_FILE_DATA_END.");
@@ -1121,6 +1361,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             }
         }
         else {
+            /* Whatever this is, we don't want it... */
             ttt_error(0, 0, "received unexpected tag %d from sender during set of files", decoded.tag);
             ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent unexpected tag %d while receiving file data", decoded.tag);
             goto fail;
@@ -1134,6 +1375,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         }
     } while (decoded.tag != TTT_MSG_FILE_SET_END);
 
+    /* Write a final "we've finished!" progress report. */
     make_progress_report(ctx, 0, local_filename, current_file_number,
             file_count, current_file_position, current_file_size,
             total_bytes_received, total_bytes_received, files_sender_failed, 1);
@@ -1151,6 +1393,33 @@ fail:
     goto end;
 }
 
+/* Play the "receiver" role in a TTT file transfer session set up in ctx. The
+ * other end of the ttt_session sess should be playing the "sender" role at
+ * the same time, or things will go rapidly downhill.
+ *
+ * The sender should send us a TTT_MSG_FILE_METADATA_SET_START message followed
+ * by the metadata section, then a TTT_FILE_SET_START message followed by the
+ * actual files, then either TTT_MSG_SWITCH_ROLES or TTT_MSG_END_SESSION.
+ *
+ * After the metadata section, if ctx->request_to_send is set, we call it
+ * passing the metadata information to give the user the opportunity to cancel
+ * the transfer if required.
+ *
+ * On return, set *file_count_out to the number of files we were supposed to
+ * receive according to the metadata section, and *sender_failed_file_count_out
+ * to the number of files the sender failed to send.
+ *
+ * Return <0 if there was a fatal error (i.e. the session died or we got some
+ * sort of file I/O error, not the sender simply failed to send some of the
+ * files).
+ *
+ * Also return <0 if the ctx->request_to_send() callback told us to reject the
+ * file set.
+ *
+ * Return 0 if the sender sent us TTT_MSG_END_SESSION.
+ * Return 1 if the sender sent us TTT_MSG_SWITCH_ROLES, after which we are
+ * the sender side.
+ */
 static int
 ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
         struct ttt_session *sess, long long *file_count_out,
@@ -1203,7 +1472,8 @@ ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
                         goto fail;
                 }
                 else {
-                    /* User rejected the files. */
+                    /* User rejected the files. Send an error reply and
+                     * make this a fatal error. */
                     file_set_rejected = 1;
                     if (ttt_reply_error(sess, TTT_ERR_FILE_SET_REJECTED, "remote user rejected file set") < 0)
                         goto fail;
@@ -1265,7 +1535,10 @@ ttt_file_transfer_session_end(struct ttt_session *sess) {
     return ttt_send_message(sess, TTT_MSG_END_SESSION);
 }
 
-
+/* Set up a struct ttt_file_transfer context structure for either the sender
+ * or receiver role. Called by ttt_file_transfer_init_sender() and
+ * ttt_file_transfer_init_receiver() to initialise things not specific to
+ * either role. */
 static void
 ttt_file_transfer_init(struct ttt_file_transfer *ctx, int start_as_sender) {
     memset(ctx, 0, sizeof(*ctx));
@@ -1280,6 +1553,7 @@ ttt_file_transfer_init(struct ttt_file_transfer *ctx, int start_as_sender) {
     ttt_file_transfer_set_progress_callback(ctx, default_progress_callback);
 }
 
+/* Initialise a struct ttt_file_transfer where we want to be the sender first. */
 int
 ttt_file_transfer_init_sender(struct ttt_file_transfer *ctx, const char **source_paths, int num_source_paths) {
     ttt_file_transfer_init(ctx, 1);
@@ -1310,6 +1584,7 @@ fail:
     return -1;
 }
 
+/* Initialise a struct ttt_file_transfer where we want to be the receiver first. */
 int
 ttt_file_transfer_init_receiver(struct ttt_file_transfer *ctx, const char *output_dir) {
     ttt_file_transfer_init(ctx, 0);

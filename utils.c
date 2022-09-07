@@ -250,7 +250,7 @@ ttt_size_to_str(long long size, char *dest) {
         }
         if (d >= 1024) {
             /* 1024 yottabytes or more? */
-            strcpy(dest, "huuuuge!");
+            strcpy(dest, "huge!");
         }
         else if (d >= 100) {
             snprintf(dest, 7, "%4d%cB", (int) d, *p);

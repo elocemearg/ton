@@ -1,3 +1,8 @@
+/* Functions for getting a list of all the broadcast-enabled and/or
+ * multicast-enabled network interfaces we have available. This is very
+ * OS-dependent so most functions are defined twice, once for Windows and
+ * once for Linux. */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>

@@ -3,28 +3,41 @@
 
 #include <stdarg.h>
 
+/* Maximum permitted length of a TTT message. */
 #define TTT_MSG_MAX 65536
 
-/* First 8 bytes of a message contain the message tag and the byte length of
- * everything after it. */
+/* TTT message header length in bytes. This is currently eight bytes: four for
+ * the message tag and four for the body length. See details below. */
+
 #define TTT_MSG_HEADER_SIZE 8
 
+/* TTT message tags. These three are replies by the receiver, but
+ * TTT_MSG_FATAL_ERROR can be sent by either side to say "I'm off" */
 #define TTT_MSG_OK                      0x000
 #define TTT_MSG_ERROR                   0x001
 #define TTT_MSG_FATAL_ERROR             0x002
 
+/* Message tags used in the metadata section of a file transfer session */
 #define TTT_MSG_FILE_METADATA_SET_START 0x101
 #define TTT_MSG_FILE_METADATA           0x102
 #define TTT_MSG_FILE_METADATA_SUMMARY   0x103
 #define TTT_MSG_FILE_METADATA_SET_END   0x104
 
+/* Message tags used in the actual file transfer */
 #define TTT_MSG_FILE_SET_START          0x201
 #define TTT_MSG_FILE_DATA_CHUNK         0x202
 #define TTT_MSG_FILE_DATA_END           0x203
 #define TTT_MSG_FILE_SET_END            0x204
 
+/* Sender sends this after the end of the file transfer if it wants to give the
+ * receiver an opportunity to send files. It can also send this at the start
+ * of the session if it has no files to send and wants to switch roles
+ * immediately. */
 #define TTT_MSG_SWITCH_ROLES            0x301
 
+/* Sender sends this if it has just sent files and doesn't want to receive
+ * any, or if it's just been given the sender role but doesn't want to send
+ * any files. */
 #define TTT_MSG_END_SESSION             0x401
 
 
@@ -259,6 +272,7 @@
 #define TTT_ERR_REMOTE_FATAL_ERROR -4
 
 struct ttt_msg {
+    /* For keeping track of how much of the message we've written so far */
     int position;
 
     /* Message length including header and body */
@@ -270,8 +284,11 @@ struct ttt_msg {
 
 
 struct ttt_decoded_msg {
+    /* Type of decoded message */
     int tag;
+
     union {
+        /* tag == TTT_MSG_FILE_METADATA */
         struct {
             long long size;
             time_t mtime;
@@ -279,35 +296,65 @@ struct ttt_decoded_msg {
             char *name;
         } metadata;
 
+        /* tag == TTT_MSG_FILE_METADATA_SUMMARY */
         struct {
             long long file_count;
             long long total_size;
         } metadata_summary;
 
+        /* tag == TTT_MSG_FILE_DATA_END, TTT_MSG_ERROR or TTT_MSG_FATAL_ERROR */
         struct {
             int code;
             char *message;
         } err;
 
+        /* tag == TTT_MSG_FILE_DATA_CHUNK */
         struct {
             int length;
             void *data;
         } chunk;
+
+        /* Other message types don't have a body defined. */
     } u;
 };
 
+/* Set the position and length fields of a ttt_msg to 0. */
 void
 ttt_msg_clear(struct ttt_msg *msg);
 
+/* Functions for creating and sending a TTT_MSG_FILE_DATA_CHUNK.
+ * Example:
+ *
+ * struct ttt_msg msg;
+ * const char *file_data = "Hello world!";
+ * void *data_ptr;
+ *
+ * ttt_msg_file_data_chunk(&msg);
+ * data_ptr = ttt_msg_file_data_chunk_data_ptr(&msg);
+ * memcpy(data_ptr, file_data, strlen(file_data));
+ * ttt_msg_file_data_chunk_set_length(&msg, strlen(file_data));
+ */
+
+/* Initialise msg to set the tag to TTT_MSG_FILE_DATA_CHUNK. Leave the length
+ * unset for now - caller will set this using
+ * ttt_msg_file_data_chunk_set_length() when it is known. */
 void
 ttt_msg_file_data_chunk(struct ttt_msg *msg);
 
+/* Return the maximum number of data bytes we can write to a
+ * TTT_MSG_FILE_DATA_CHUNK message. */
 int
 ttt_msg_file_data_chunk_get_max_length(struct ttt_msg *msg);
 
+/* Set the number of data bytes in a TTT_MSG_FILE_DATA_CHUNK. */
 void
 ttt_msg_file_data_chunk_set_length(struct ttt_msg *msg, int length);
 
+/* Get a pointer into msg, into which the caller may copy the data bytes
+ * for this TTT_MSG_FILE_DATA_CHUNK message. The caller may not copy more
+ * than ttt_msg_file_data_chunk_get_max_length() bytes into this, and the
+ * caller must also call ttt_msg_file_data_chunk_set_length() to the number
+ * of data bytes copied in before sending the message. */
 void *
 ttt_msg_file_data_chunk_data_ptr(struct ttt_msg *msg);
 

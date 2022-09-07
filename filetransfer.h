@@ -15,10 +15,10 @@ struct ttt_file {
      * relative to the path specified on the command line. */
     char *ttt_path;
 
-    /* Modified time of the file. */
+    /* Modified time of the file. This is a Unix timestamp. */
     time_t mtime;
 
-    /* File mode/permissions. */
+    /* File mode/permissions (Unix style) */
     int mode;
 
     /* Size of the file in bytes. */
@@ -159,12 +159,21 @@ ttt_file_transfer_init_receiver(struct ttt_file_transfer *ctx, const char *outpu
 void
 ttt_file_transfer_set_callback_cookie(struct ttt_file_transfer *ctx, void *cookie);
 
+/* Set the callback function to be called when as a receiver we receive the
+ * metadata section of the file transfer. The callback function can return -1
+ * to cancel the transfer. */
 void
 ttt_file_transfer_set_request_to_send_callback(struct ttt_file_transfer *ctx, ttt_ft_request_to_send_cb cb);
 
+/* Set the callback function to be called periodically during the transfer to
+ * update the user on prgoress. */
 void
 ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_progress_cb cb);
 
+/* When we're the sender sending the metadata section, specify whether we're to
+ * send the full metadata list containing metadata for every file we intend to
+ * send (value == 1) or just a summary containing the count and total size of
+ * the files (value == 0). */
 void
 ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, int value);
 
