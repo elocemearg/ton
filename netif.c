@@ -10,6 +10,9 @@
 #include <sys/types.h>
 #include <assert.h>
 
+#include "utils.h"
+#include "defaults.h"
+
 #ifdef WINDOWS
 #include <winsock2.h>
 #include <winsock.h>
@@ -19,6 +22,10 @@
 #include <netinet/in.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <sys/types.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
 #endif
 
 #ifdef UNIX
@@ -226,4 +233,74 @@ ttt_free_addrs(struct sockaddr **addrs, int num_addrs) {
         }
         free(addrs);
     }
+}
+
+/* List of multicast interface addresses. We populate this the first time
+ * multicast_interfaces_subscribe() is called. */
+static struct sockaddr **multicast_if_addrs = NULL;
+static int num_multicast_if_addrs = 0;
+
+/* Subscribe or unsubscribe all multicast-enabled interfaces to/from
+ * multicast_addr_str on the given socket. */
+static int
+multicast_interfaces_change_membership(int sock, const char *multicast_addr_str, int subscribe) {
+    struct addrinfo hints;
+    struct addrinfo *multicast_addr = NULL;
+    int num_multicast_succeeded = 0;
+    int rc;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    if (multicast_addr_str) {
+        multicast_addr_str = TTT_MULTICAST_RENDEZVOUS_ADDR;
+    }
+
+    rc = getaddrinfo(multicast_addr_str, NULL, &hints, &multicast_addr);
+    if (rc != 0) {
+        ttt_error(0, 0, "getaddrinfo: %s: %s", multicast_addr_str, gai_strerror(rc));
+        return -1;
+    }
+
+    if (multicast_if_addrs == NULL) {
+        errno = 0;
+        multicast_if_addrs = ttt_get_multicast_if_addrs(&num_multicast_if_addrs);
+        if (multicast_if_addrs == NULL && errno != 0) {
+            ttt_error(0, errno, "failed to get list of multicast interfaces");
+        }
+    }
+
+    for (int i = 0; i < num_multicast_if_addrs; i++) {
+        /* Go through every multicast-enabled interface and enable it to
+         * receive multicast messages to multicast_addr_str.
+         * This might not work on some interfaces, but we return the number
+         * of interfaces on which we successfully called setsockopt. */
+        struct sockaddr *if_addr = multicast_if_addrs[i];
+        if (if_addr->sa_family == AF_INET && multicast_addr->ai_family == AF_INET) {
+            struct ip_mreq group;
+            group.imr_multiaddr.s_addr = ((struct sockaddr_in *) multicast_addr->ai_addr)->sin_addr.s_addr;
+            group.imr_interface.s_addr = ((struct sockaddr_in *) if_addr)->sin_addr.s_addr;
+            if (setsockopt(sock, IPPROTO_IP, subscribe ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, (char *) &group, sizeof(group)) == 0) {
+                num_multicast_succeeded++;
+            }
+        }
+        /* IPv6: need ttt_get_multicast_if_addrs() to return the "interface
+         * index" as well as the address, because struct ipv6_mreq
+         * requires that. */
+    }
+    freeaddrinfo(multicast_addr);
+
+    return num_multicast_succeeded;
+}
+
+int
+multicast_interfaces_subscribe(int sock, const char *multicast_addr_str) {
+    return multicast_interfaces_change_membership(sock, multicast_addr_str, 1);
+}
+
+int
+multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str) {
+    return multicast_interfaces_change_membership(sock, multicast_addr_str, 0);
 }

@@ -364,10 +364,6 @@ tttdlctx_listen(struct tttdlctx *ctx,
     const int one = 1;
 #endif
     int discovered = 0;
-    struct sockaddr **multicast_if_addrs = NULL;
-    int num_multicast_if_addrs = 0;
-    int num_multicast_failed = 0;
-    int num_multicast_succeeded = 0;
 
     /* Note: make sure we get an IPv4 address for now until we add code to
      * enable multicast on IPv6 addresses. */
@@ -401,35 +397,9 @@ tttdlctx_listen(struct tttdlctx *ctx,
         goto fail;
     }
 
-    errno = 0;
-    multicast_if_addrs = ttt_get_multicast_if_addrs(&num_multicast_if_addrs);
-    if (multicast_if_addrs == NULL && errno != 0) {
-        ttt_error(0, errno, "failed to get list of multicast interfaces");
-    }
-    for (int i = 0; i < num_multicast_if_addrs; i++) {
-        /* Your ideas are intriguing to me
-         * and I wish to subscribe to your newsletter. */
-        struct sockaddr *sa = multicast_if_addrs[i];
-        if (sa->sa_family == AF_INET) {
-            /* Go through every multicast-enabled interface and tell it to
-             * listen for multicast messages to multicast_rendezvous_addr.
-             * This might not work on some interfaces, but we soldier on
-             * unless they all fail. */
-            struct ip_mreq group;
-            group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
-            group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
-            if (setsockopt(listener, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *) &group, sizeof(group)) != 0) {
-                num_multicast_failed++;
-            }
-            else {
-                num_multicast_succeeded++;
-            }
-        }
-    }
-
-    if (num_multicast_succeeded == 0 && num_multicast_failed > 0) {
-        /* All multicast IP_ADD_MEMBERSHIP attempts failed. */
-        ttt_socket_error(0, "discover_listen: setsockopt IP_ADD_MEMBERSHIP (%d socket(s) failed)", num_multicast_failed);
+    rc = multicast_interfaces_subscribe(listener, ctx->multicast_rendezvous_addr);
+    if (rc <= 0) {
+        ttt_socket_error(0, "failed to join multicast group %s on any interface", ctx->multicast_rendezvous_addr);
         goto fail;
     }
 
@@ -474,28 +444,12 @@ tttdlctx_listen(struct tttdlctx *ctx,
         rc = -1;
 
 end:
-    if (listener >= 0) {
-        for (int i = 0; i < num_multicast_if_addrs; i++) {
-            /* Unsubscribe this process from receiving multicast packets. */
-            struct sockaddr *sa = multicast_if_addrs[i];
-            if (sa->sa_family == AF_INET) {
-                /* Go through every multicast-enabled interface and tell it to
-                 * listen for multicast messages to multicast_rendezvous_addr.
-                 * This might not work on some interfaces, but we soldier on
-                 * unless they all fail. */
-                struct ip_mreq group;
-                group.imr_multiaddr.s_addr = inet_addr(ctx->multicast_rendezvous_addr);
-                group.imr_interface.s_addr = ((struct sockaddr_in *) sa)->sin_addr.s_addr;
-                setsockopt(listener, IPPROTO_IP, IP_DROP_MEMBERSHIP, (char *) &group, sizeof(group));
-            }
-        }
-    }
-
+    if (listener >= 0)
+        multicast_interfaces_unsubscribe(listener, ctx->multicast_rendezvous_addr);
     if (addrinfo)
         freeaddrinfo(addrinfo);
     if (listener >= 0)
         closesocket(listener);
-    ttt_free_addrs(multicast_if_addrs, num_multicast_if_addrs);
     return rc;
 
 fail:
