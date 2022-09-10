@@ -141,7 +141,7 @@ main_pull(int argc, char **argv) {
     int max_announcements = 0;
     int announcement_interval_ms = 1000;
     int discover_port = -1;
-    int multicast_ttl = 1;
+    int multicast_ttl = 0; // use default (1 for IPv4, route default for IPv6)
     char *passphrase = NULL;
     char *multicast_address = NULL;
     struct ttt_session sess;
@@ -185,8 +185,8 @@ main_pull(int argc, char **argv) {
 
             case PULL_MULTICAST_TTL:
                 multicast_ttl = atoi(optarg);
-                if (multicast_ttl < 1)
-                    multicast_ttl = 1;
+                if (multicast_ttl < 0)
+                    multicast_ttl = 0;
                 else if (multicast_ttl > 5)
                     ttt_error(1, 0, "--multicast-ttl: I'm not going higher than 5");
                 break;

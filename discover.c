@@ -275,6 +275,16 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
     return 8 + encrypted_payload_length;
 }
 
+static void
+sockaddr_set_port(struct sockaddr *sa, PORT port) {
+    if (sa->sa_family == AF_INET) {
+        ((struct sockaddr_in *) sa)->sin_port = htons(port);
+    }
+    else if (sa->sa_family == AF_INET6) {
+        ((struct sockaddr_in6 *) sa)->sin6_port = htons(port);
+    }
+}
+
 int
 tttdlctx_init(struct tttdlctx *ctx,
         const char *secret, size_t secret_length) {
@@ -478,7 +488,12 @@ make_dgram_addr_info(const char *multicast_rendezvous_addr, PORT announce_port, 
 int
 tttdactx_init(struct tttdactx *ctx, const char *secret, size_t secret_length) {
     int rc;
-    int num_failed_sockets = 0;
+    int num_valid_sockets = 0;
+#ifdef WINDOWS
+    const BOOL one = 1;
+#else
+    const int one = 1;
+#endif
 
     memset(ctx, 0, sizeof(*ctx));
 
@@ -498,100 +513,77 @@ tttdactx_init(struct tttdactx *ctx, const char *secret, size_t secret_length) {
      * and a multicast packet on every interface that supports multicast and
      * has a non-public IP address. */
     errno = 0;
-    ctx->broadcast_if_addrs = ttt_get_broadcast_if_addrs(&ctx->num_broadcast_if_addrs);
-    if (ctx->broadcast_if_addrs == NULL && errno != 0) {
+    ctx->broadcast_ifs = ttt_get_broadcast_ifs();
+    if (ctx->broadcast_ifs == NULL && errno != 0) {
         ttt_error(0, errno, "failed to get list of broadcast-enabled interfaces");
     }
 
     errno = 0;
-    ctx->multicast_if_addrs = ttt_get_multicast_if_addrs(&ctx->num_multicast_if_addrs);
-    if (ctx->multicast_if_addrs == NULL && errno != 0) {
+    ctx->multicast_ifs = ttt_get_multicast_ifs();
+    if (ctx->multicast_ifs == NULL && errno != 0) {
         ttt_error(0, errno, "failed to get list of multicast-enabled interfaces");
     }
 
-    if (ctx->num_broadcast_if_addrs <= 0 && ctx->num_multicast_if_addrs <= 0) {
-        ttt_error(0, 0, "no suitable network interfaces!");
+    if (ctx->multicast_ifs == NULL && ctx->broadcast_ifs == NULL) {
+        ttt_error(0, 0, "no suitable network interfaces found for announcement");
         goto fail;
     }
 
-    if (ctx->num_broadcast_if_addrs < 0)
-        ctx->num_broadcast_if_addrs = 0;
-    if (ctx->num_multicast_if_addrs < 0)
-        ctx->num_multicast_if_addrs = 0;
-
-    ctx->num_sockets = ctx->num_broadcast_if_addrs + ctx->num_multicast_if_addrs;
-    ctx->sockets = malloc(sizeof(int) * ctx->num_sockets);
-    if (ctx->sockets == NULL) {
-        ttt_error(0, errno, "malloc");
-        goto fail;
-    }
-    for (int i = 0; i < ctx->num_sockets; i++) {
-        ctx->sockets[i] = -1;
-    }
-
-    /* sockets contains num_broadcast_if_addrs sockets to broadcast on,
-     * followed by num_multicast_if_addrs sockets to multicast on. */
-
-    for (int i = 0; i < ctx->num_sockets; i++) {
-#ifdef WINDOWS
-        const BOOL one = 1;
-#else
-        const int one = 1;
-#endif
-        const int multicast_ttl = 1;
-        struct sockaddr *sa = (i < ctx->num_broadcast_if_addrs) ? ctx->broadcast_if_addrs[i] : ctx->multicast_if_addrs[i - ctx->num_broadcast_if_addrs];
-        ctx->sockets[i] = socket(sa->sa_family, SOCK_DGRAM, 0);
-        if (ctx->sockets[i] < 0) {
-            ttt_socket_error(0, "socket");
-            goto fail;
-        }
-        if (i < ctx->num_broadcast_if_addrs) {
-            /* Set up this socket for broadcast, and fill in the port number
-             * of the struct sockaddr. */
-            rc = setsockopt(ctx->sockets[i], SOL_SOCKET, SO_BROADCAST, (const char *) &one, sizeof(one));
+    /* Initialise sockets to send broadcast packets on... */
+    for (struct ttt_netif *iface = ctx->broadcast_ifs; iface; iface = iface->next) {
+        if (iface->bc_valid) {
+            iface->sock = socket(iface->family, SOCK_DGRAM, 0);
+            if (iface->sock < 0) {
+                ttt_socket_error(0, "socket");
+                goto fail;
+            }
+            rc = setsockopt(iface->sock, SOL_SOCKET, SO_BROADCAST, (const char *) &one, sizeof(one));
             if (rc < 0) {
                 ttt_socket_error(0, "discover_announce: setsockopt SO_BROADCAST");
                 goto fail;
             }
-
-            if (sa->sa_family == AF_INET) {
-                ((struct sockaddr_in *) sa)->sin_port = htons(ctx->announce_port);
-
-            }
-            else if (sa->sa_family == AF_INET6) {
-                ((struct sockaddr_in6 *) sa)->sin6_port = htons(ctx->announce_port);
-            }
+            sockaddr_set_port((struct sockaddr *) &iface->bc_addr, ctx->announce_port);
         }
-        else {
-            /* Set up this socket for multicast. */
-            /* setsockopt takes only IPv4 in_addr structs, so
-             * ttt_get_multicast_if_addrs() only returns IPv4 interfaces */
-            struct sockaddr_in *sin;
-            assert(sa->sa_family == AF_INET);
-            sin = (struct sockaddr_in *) sa;
-            rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_IF, (const char *) &sin->sin_addr, sizeof(sin->sin_addr));
+        if (iface->sock >= 0) {
+            num_valid_sockets++;
+        }
+    }
+
+    /* ... and initialise sockets to send multicast packets on. */
+    for (struct ttt_netif *iface = ctx->multicast_ifs; iface; iface = iface->next) {
+        iface->sock = socket(iface->family, SOCK_DGRAM, 0);
+        if (iface->sock < 0) {
+            ttt_socket_error(0, "socket");
+            goto fail;
+        }
+
+        if (iface->family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)&iface->if_addr;
+            rc = setsockopt(iface->sock, IPPROTO_IP, IP_MULTICAST_IF, (const char *) &sin->sin_addr, sizeof(sin->sin_addr));
             if (rc != 0) {
                 /* Failed to enable this socket for multicast traffic,
                  * perhaps because it's a localhost or link-local address.
                  * This isn't a fatal error unless there are no more
                  * sockets. */
-                closesocket(ctx->sockets[i]);
-                ctx->sockets[i] = -1;
-                num_failed_sockets++;
-                if (num_failed_sockets >= ctx->num_sockets) {
-                    ttt_socket_error(0, "Failed to enable multicast on %d interface(s) and no more interfaces available... setsockopt IP_MULTICAST_IF", num_failed_sockets);
-                    goto fail;
-                }
-            }
-            else {
-                if (multicast_ttl != 1) {
-                    rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &multicast_ttl, sizeof(multicast_ttl));
-                    if (rc != 0) {
-                        ttt_socket_error(0, "discover_announce: setsockopt IP_MULTICAST_TTL");
-                    }
-                }
+                closesocket(iface->sock);
+                iface->sock = -1;
             }
         }
+        else if (iface->family == AF_INET6) {
+            rc = setsockopt(iface->sock, IPPROTO_IP, IPV6_MULTICAST_IF, (const char *) &iface->if_index_ipv6, sizeof(iface->if_index_ipv6));
+            if (rc != 0) {
+                //ttt_socket_error(0, "failed to enable IPv6 socket for multicast traffic");
+                closesocket(iface->sock);
+                iface->sock = -1;
+            }
+        }
+        if (iface->sock >= 0) {
+            num_valid_sockets++;
+        }
+    }
+
+    if (num_valid_sockets == 0) {
+        ttt_socket_error(0, "no suitable network interfaces found for announcement. Last socket error was");
     }
 
     /* Get an addrinfo for our multicast rendezvous address, which we will be
@@ -613,15 +605,8 @@ tttdactx_set_port(struct tttdactx *ctx, PORT port) {
     ctx->announce_port = port;
 
     /* Change the port number in the broadcast address structs... */
-    for (int i = 0; i < ctx->num_broadcast_if_addrs; ++i) {
-        struct sockaddr *sa = ctx->broadcast_if_addrs[i];
-        if (sa->sa_family == AF_INET) {
-            ((struct sockaddr_in *) sa)->sin_port = htons(ctx->announce_port);
-
-        }
-        else if (sa->sa_family == AF_INET6) {
-            ((struct sockaddr_in6 *) sa)->sin6_port = htons(ctx->announce_port);
-        }
+    for (struct ttt_netif *iface = ctx->broadcast_ifs; iface; iface = iface->next) {
+        sockaddr_set_port((struct sockaddr *) &iface->bc_addr, ctx->announce_port);
     }
 
     /* Change the port number in the multicast destination address... */
@@ -643,9 +628,11 @@ tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr) {
 
 void
 tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl) {
-    for (int i = ctx->num_broadcast_if_addrs; i < ctx->num_sockets; i++) {
-        if (ctx->sockets[i] >= 0) {
-            int rc = setsockopt(ctx->sockets[i], IPPROTO_IP, IP_MULTICAST_TTL, (const char *) &ttl, sizeof(ttl));
+    for (struct ttt_netif *iface = ctx->multicast_ifs; iface; iface = iface->next) {
+        if (iface->sock >= 0) {
+            int rc = setsockopt(iface->sock, IPPROTO_IP,
+                    iface->family == AF_INET6 ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL,
+                    (const char *) &ttl, sizeof(ttl));
             if (rc != 0) {
                 ttt_socket_error(0, "discover_announce: setsockopt IP_MULTICAST_TTL");
             }
@@ -657,23 +644,16 @@ void
 tttdactx_destroy(struct tttdactx *ctx) {
     free(ctx->multicast_rendezvous_addr);
     free(ctx->secret);
-    if (ctx->sockets) {
-        for (int i = 0; i < ctx->num_sockets; i++) {
-            if (ctx->sockets[i] >= 0)
-                closesocket(ctx->sockets[i]);
-        }
-        free(ctx->sockets);
-    }
     if (ctx->multicast_rendezvous_addrinfo != NULL) {
         freeaddrinfo(ctx->multicast_rendezvous_addrinfo);
     }
-    ttt_free_addrs(ctx->broadcast_if_addrs, ctx->num_broadcast_if_addrs);
-    ttt_free_addrs(ctx->multicast_if_addrs, ctx->num_multicast_if_addrs);
+    ttt_netif_list_free(ctx->broadcast_ifs, 1);
+    ttt_netif_list_free(ctx->multicast_ifs, 1);
 }
 
 int
 tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
-    int num_sockets_failed = 0;
+    int num_sockets_succeeded = 0;
     char datagram[262];
     int datagram_length;
 
@@ -682,52 +662,51 @@ tttdactx_announce(struct tttdactx *ctx, PORT invitation_port) {
             invitation_port);
     if (datagram_length < 0) {
         ttt_error(0, errno, "discover_announce: failed to build datagram");
-        goto fail;
+        return -1;
     }
 
-    for (int si = 0; si < ctx->num_sockets; si++) {
-        ssize_t bytes_sent;
-        struct sockaddr *sa;
-        int sa_len;
+    /* Go through the list of broadcast-enabled interfaces, and the list of
+     * multicast-enabled interfaces, and send an announcement datagram on the
+     * socket we've opened for each of them. */
+    for (int type = 0; type < 2; ++type) {
+        struct ttt_netif *list = (type == 0 ? ctx->broadcast_ifs : ctx->multicast_ifs);
+        for (struct ttt_netif *iface = list; iface; iface = iface->next) {
+            ssize_t bytes_sent;
+            struct sockaddr *sa;
+            int sa_len;
 
-        /* Skip sockets which failed setup in some way */
-        if (ctx->sockets[si] < 0) {
-            num_sockets_failed++;
-            continue;
-        }
-
-        if (si < ctx->num_broadcast_if_addrs) {
-            sa = ctx->broadcast_if_addrs[si];
-            if (sa->sa_family == AF_INET)
-                sa_len = sizeof(struct sockaddr_in);
-            else if (sa->sa_family == AF_INET6)
-                sa_len = sizeof(struct sockaddr_in6);
-            else
+            /* Skip sockets which failed setup in some way */
+            if (iface->sock < 0) {
                 continue;
-        }
-        else {
-            sa = ctx->multicast_rendezvous_addrinfo->ai_addr;
-            sa_len = ctx->multicast_rendezvous_addrinfo->ai_addrlen;
-        }
+            }
 
-        bytes_sent = sendto(ctx->sockets[si], datagram, datagram_length, 0, sa, sa_len);
-        if (bytes_sent < 0) {
-            ttt_socket_error(0, "discover_announce: sendto");
-            num_sockets_failed++;
-        }
-        else if (bytes_sent < datagram_length) {
-            ttt_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
-            num_sockets_failed++;
+            if (type == 0) {
+                /* Send to broadcast address */
+                sa = (struct sockaddr *) &iface->bc_addr;
+                sa_len = iface->bc_addr_len;
+            }
+            else {
+                /* Send to multicast rendezvous address */
+                sa = ctx->multicast_rendezvous_addrinfo->ai_addr;
+                sa_len = ctx->multicast_rendezvous_addrinfo->ai_addrlen;
+            }
+
+            bytes_sent = sendto(iface->sock, datagram, datagram_length, 0, sa, sa_len);
+            if (bytes_sent < 0) {
+                ttt_socket_error(0, "discover_announce: sendto");
+            }
+            else if (bytes_sent < datagram_length) {
+                ttt_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
+            }
+            else {
+                num_sockets_succeeded++;
+            }
         }
     }
 
-    /* Return -1 (failure) if we failed to send on all sockets. */
-    return -(num_sockets_failed == ctx->num_sockets);
-
-fail:
-    return -1;
+    /* Return -1 (failure) if every attempt to send failed. */
+    return num_sockets_succeeded == 0 ? -1 : 0;
 }
-
 
 int
 ttt_discover_and_connect(const char *multicast_address, int discover_port,
@@ -847,7 +826,7 @@ ttt_discover_and_accept(const char *multicast_address, int discover_port,
 
     /* Set TTL, if required. This affects our outgoing announcement
      * datagrams. */
-    if (multicast_ttl > 1) {
+    if (multicast_ttl != 0) {
         tttdactx_set_multicast_ttl(&dactx, multicast_ttl);
     }
 

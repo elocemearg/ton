@@ -1,33 +1,87 @@
 #ifndef _TTTNETIF_H
 #define _TTTNETIF_H
 
+#ifdef WINDOWS
+#include <winsock2.h>
+#include <winsock.h>
+#include <ws2ipdef.h> /* for struct sockaddr_in6 */
+#include <ws2tcpip.h>
+#else
 #include <sys/types.h>
+#include <sys/socket.h>
+#endif
+
+/* Windows/Linux-independent struct describing a network interface on this
+ * computer. */
+struct ttt_netif {
+    /* Address family: AF_INET or AF_INET6 */
+#ifdef WINDOWS
+    u_short family;
+#else
+    sa_family_t family;
+#endif
+
+    /* The IP address of this interface. Cast it to struct sockaddr if
+     * family == AF_INET, or struct sockaddr_in if family == AF_INET6. */
+    struct sockaddr_storage if_addr;
+
+    /* Length of the sockaddr in if_addr. */
+    socklen_t if_addr_len;
+
+    /* OS-level identifier for this interface, for IPv4 and IPv6. */
+#ifdef WINDOWS
+    DWORD if_index_ipv4;
+    DWORD if_index_ipv6;
+#else
+    int if_index_ipv4;
+    int if_index_ipv6;
+#endif
+
+    /* True if bc_addr is valid */
+    int bc_valid;
+
+    /* The broadcast address of this interface, if applicable. IPv6 doesn't
+     * use broadcast addresses, so if this is valid it will be a
+     * struct sockaddr_in. */
+    struct sockaddr_storage bc_addr;
+
+    /* Length of the sockaddr in bc_addr. */
+    socklen_t bc_addr_len;
+
+    /* netif.c initialises this to -1 upon creation of the ttt_netif object.
+     * It's only for the caller to store a socket alongside this interface.
+     * In particular, ttt_netif_list_free() will close it if asked to. */
+    int sock;
+
+    /* Next interface in the list. */
+    struct ttt_netif *next;
+};
 
 /* Get a list of all suitable network interfaces which support multicast.
- * We return an array of pointers to struct sockaddr *. There is one
- * (struct sockaddr *) per interface, and set *num_ifaces to the number of
- * elements in the array.
+ * We return a pointer to a linked list of struct ttt_netif.
  *
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
-struct sockaddr **
-ttt_get_multicast_if_addrs(int *num_ifaces);
+struct ttt_netif *
+ttt_get_multicast_ifs(void);
 
 /* Get a list of all suitable network interfaces which have a broadcast
- * address we can use. We return an array of pointers to struct sockaddr *.
- * There is one (struct sockaddr *) per interface. Each sockaddr is a broadcast
- * address. We  set *num_ifaces to the number of elements in the array.
+ * address we can use. We return a pointer to a linked list of struct ttt_netif.
  *
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
-struct sockaddr **
-ttt_get_broadcast_if_addrs(int *num_ifaces);
+struct ttt_netif *
+ttt_get_broadcast_ifs(void);
 
-/* Free a list of addresses previously returned by ttt_get_multicast_if_addrs()
- * or ttt_get_broadcast_if_addrs(). num_addrs must be the *num_ifaces value
- * yielded by that function. */
+/* Free a list of interfaces previously returned by ttt_get_multicast_ifs()
+ * or ttt_get_broadcast_ifs(). num_addrs must be the *num_ifaces value
+ * yielded by that function.
+ *
+ * If close_sockets is nonzero, then ttt_netif_list_free() calls closesocket()
+ * on each ttt_netif's sock value if that is non-negative.
+ */
 void
-ttt_free_addrs(struct sockaddr **addrs, int num_addrs);
+ttt_netif_list_free(struct ttt_netif *list, int close_sockets);
 
 /* Find all the multicast-enabled interfaces we can and enable them to receive
  * multicast datagrams on this socket to the given address, which must be in

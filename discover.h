@@ -64,20 +64,13 @@ struct tttdactx {
     char *secret;
     size_t secret_length;
 
-    /* List of network interfaces which have a broadcast address. */
-    struct sockaddr **broadcast_if_addrs;
-    int num_broadcast_if_addrs;
+    /* List of network interfaces which have a broadcast address, each of
+     * which contains a socket we will bind to that interface's address. */
+    struct ttt_netif *broadcast_ifs;
 
-    /* List of network interfaces which we can use to send multicast packets. */
-    struct sockaddr **multicast_if_addrs;
-    int num_multicast_if_addrs;
-
-    /* Array of sockets, one per applicable network interface. This consists
-     * of num_broadcast_if_addrs sockets we can broadcast on, followed by
-     * num_multicast_if_addrs sockets we can multicast on. At all times,
-     * num_sockets == num_broadcast_if_addrs + num_multicast_if_addrs. */
-    int *sockets;
-    int num_sockets;
+    /* List of network interfaces which we can use to send multicast packets.
+     * Each contains a socket we will bind to that interface's address. */
+    struct ttt_netif *multicast_ifs;
 };
 
 /* Initialise a discover-announce context with the given passphrase. This also
@@ -263,7 +256,8 @@ ttt_discover_and_connect(const char *multicast_address, int discover_port,
  *
  * multicast_ttl: the TTL to set on our multicast announcement datagrams.
  *   Warning: the ip(7) man page strongly warns against setting this to
- *   anything higher than it needs to be. The recommended value is 1.
+ *   anything higher than it needs to be. The recommended value is 0, which
+ *   leaves it at the default (1 for IPv4, route default for IPv6).
  *
  * passphrase, passphrase_length: the passphrase to use, and its length in
  *   bytes. The other host must use exactly the same passphrase. If it doesn't,
