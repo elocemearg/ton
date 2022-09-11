@@ -41,6 +41,109 @@ ttt_netif_new(void) {
     return iface;
 }
 
+void
+ttt_netif_list_free(struct ttt_netif *list, int close_sockets) {
+    struct ttt_netif *cur, *next;
+    for (cur = list; cur != NULL; cur = next) {
+        next = cur->next;
+        if (cur->sock >= 0) {
+            closesocket(cur->sock);
+        }
+        free(cur);
+    }
+}
+
+static int
+netif_fam_addr_cmp(const void *v1, const void *v2) {
+    const struct ttt_netif *n1 = *(const struct ttt_netif **) v1;
+    const struct ttt_netif *n2 = *(const struct ttt_netif **) v2;
+    if (n1->family < n2->family)
+        return -1;
+    else if (n1->family > n2->family)
+        return 1;
+    else {
+        switch (n1->family) {
+            case AF_INET:
+                return memcmp(&((const struct sockaddr_in *) &n1->if_addr)->sin_addr,
+                        &((const struct sockaddr_in *) &n2->if_addr)->sin_addr,
+                        sizeof(struct in_addr));
+            case AF_INET6:
+                return memcmp(&((const struct sockaddr_in6 *) &n1->if_addr)->sin6_addr,
+                        &((const struct sockaddr_in6 *) &n2->if_addr)->sin6_addr,
+                        sizeof(struct in6_addr));
+            default:
+                return 0;
+        }
+    }
+}
+
+static void
+netif_list_sort(struct ttt_netif **first, struct ttt_netif **last) {
+    struct ttt_netif **array = NULL;
+    struct ttt_netif *prev;
+    int count = 0;
+    int pos = 0;
+
+    /* Count how many elements are in the list, and if there are fewer than
+     * two, it's already sorted */
+    for (struct ttt_netif *i = *first; i; i = i->next) {
+        count++;
+    }
+    if (count < 2)
+        return;
+
+    /* Allocate an array, one for a pointer to each item */
+    array = malloc(sizeof(struct ttt_netif *) * count);
+    if (array == NULL) {
+        ttt_error(1, errno, "netif_list_sort: out of memory");
+    }
+
+    /* Put all the item pointers into an array */
+    pos = 0;
+    for (struct ttt_netif *i = *first; i; i = i->next) {
+        array[pos++] = i;
+    }
+
+    /* Sort the array */
+    qsort(array, count, sizeof(array[0]), netif_fam_addr_cmp);
+
+    /* Fix the linked list pointers */
+    prev = NULL;
+    for (pos = 0; pos < count; ++pos) {
+        if (prev == NULL) {
+            *first = array[pos];
+        }
+        else {
+            prev->next = array[pos];
+        }
+        prev = array[pos];
+    }
+    prev->next = NULL;
+    *last = prev;
+
+    free(array);
+}
+
+static void
+netif_remove_duplicates(struct ttt_netif **first, struct ttt_netif **last) {
+    struct ttt_netif *prev, *cur, *next;
+    prev = NULL;
+    for (cur = *first; cur; cur = next) {
+        next = cur->next;
+        if (prev != NULL && netif_fam_addr_cmp((const void *) &prev, (const void *) &cur) == 0) {
+            /* This is the same address and family as prev, so remove it
+             * from the list */
+            prev->next = next;
+            cur->next = NULL;
+            ttt_netif_list_free(cur, 1);
+        }
+        else {
+            prev = cur;
+        }
+    }
+    *last = prev;
+}
+
 #ifdef UNIX
 static struct ttt_netif *
 get_if_addrs(int address_families_flags, unsigned int required_iff_flags) {
@@ -147,6 +250,9 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags) {
             }
         }
     }
+
+    netif_list_sort(&first, &last);
+    netif_remove_duplicates(&first, &last);
 
 end:
     if (ipv6_bcast != NULL)
@@ -272,6 +378,9 @@ get_if_addrs(int address_families_flags, int multicast_only) {
         }
     }
 
+    netif_list_sort(&first, &last);
+    netif_remove_duplicates(&first, &last);
+
     free(addrs);
     return first;
 }
@@ -287,18 +396,6 @@ ttt_get_broadcast_ifs(int address_families_flags) {
     return NULL;
 }
 #endif
-
-void
-ttt_netif_list_free(struct ttt_netif *list, int close_sockets) {
-    struct ttt_netif *cur, *next;
-    for (cur = list; cur != NULL; cur = next) {
-        next = cur->next;
-        if (cur->sock >= 0) {
-            closesocket(cur->sock);
-        }
-        free(cur);
-    }
-}
 
 /* List of multicast interface addresses. We populate this the first time
  * multicast_interfaces_subscribe() is called. */

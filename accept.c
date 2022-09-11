@@ -52,18 +52,7 @@ tttacctx_add_session(struct tttacctx *ctx, int new_socket, struct sockaddr *addr
 
 static void
 tttacctx_remove_session(struct tttacctx *ctx, struct ttt_session *target) {
-    struct ttt_session *prev = NULL;
-    for (struct ttt_session *cur = ctx->sessions; cur; cur = cur->next) {
-        if (cur == target) {
-            if (prev == NULL) {
-                ctx->sessions = cur->next;
-            }
-            else {
-                prev->next = cur->next;
-            }
-            break;
-        }
-    }
+    ttt_session_remove_from_list(&ctx->sessions, target);
 }
 
 void

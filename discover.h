@@ -26,6 +26,9 @@ struct tttdlctx {
      * announcements on IPv6 multicast. */
     char *multicast_rendezvous_addr6;
 
+    /* IPv4 and IPv6 receiving sockets */
+    int receivers[2];
+
     /* Port on which to listen for announcements. */
     PORT listen_port;
 
@@ -114,7 +117,7 @@ struct tttdactx {
  * Return 0 on success, or nonzero on error. We might return an error if there
  * are no suitable network interfaces, for example. */
 int
-tttdactx_init(struct tttdactx *ctx, int address_families_flags, 
+tttdactx_init(struct tttdactx *ctx, int address_families_flags,
         int address_types_flags, const char *passphrase, size_t passphrase_length);
 
 /* Set the port number on which to send announcement datagrams.
@@ -201,6 +204,15 @@ tttdlctx_set_verbose(struct tttdlctx *ctx, int value);
 void
 tttdlctx_set_address_families(struct tttdlctx *ctx, int address_families);
 
+/* Create receiving sockets in ctx to listen for IPv4 and/or IPv6 announcement
+ * datagrams, as appropriate.
+ *
+ * This must be called after setting any options such as address families,
+ * announcement types etc, and before calling tttdlctx_receive().
+ */
+int
+tttdlctx_receive_enable(struct tttdlctx *ctx);
+
 /* Listen for UDP datagrams on the discover port, on all suitable network
  * interfaces.
  *
@@ -217,12 +229,43 @@ tttdlctx_set_address_families(struct tttdlctx *ctx, int address_families);
  * decrypted datagram is put in *invitation_port_r. Then we return 0 for
  * success.
  *
- * Return nonzero on error.
+ * Return 0 if there was nothing to receive.
+ * Return 1 if we received a valid announcement. In this case the source
+ *   address of the announcement is placed in *peer_addr_r and the length
+ *   of the sockaddr in *peer_addr_length_r. The invitation port number
+ *   in the announcement is placed in *invitation_port_r.
+ * Return a negative number in the event of an error.
  */
 int
-tttdlctx_listen(struct tttdlctx *ctx,
+tttdlctx_receive(struct tttdlctx *ctx,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
         PORT *invitation_port_r);
+
+/* Add this discover-listen context's receiving socket(s) (created by a
+ * previous call to tttdlctx_receive_enable()) to the given fd_set
+ * using FD_SET().
+ *
+ * Return the highest-numbered file descriptor added to the set, or -1 if
+ * no file descriptors were added. */
+int
+tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set);
+
+/* Test whether any of this discover-listen context's receiving socket(s)
+ * (created by a previous call to tttdlctx_receive_enable()) are in the
+ * given fd_set.
+ *
+ * If this returns 1, then there is something to receive on at least one of
+ * our receiving sockets, and a call to tttdlctx_receive() will not block.
+ *
+ * If this returns 0, then there is nothing to receive. */
+int
+tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set);
+
+/* Destroy any receiving sockets created by tttdlctx_receive_enable(). This
+ * function is automatically called by tttdlctx_destroy().
+ */
+void
+tttdlctx_receive_disable(struct tttdlctx *ctx);
 
 /* Destroy a previously-initialised TTT discover-listen context and free any
  * resources associated with it. */

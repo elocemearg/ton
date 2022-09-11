@@ -71,4 +71,7 @@ ttt_session_destroy(struct ttt_session *s);
 int
 ttt_session_set_key(const char *passphrase, size_t passphrase_length);
 
+void
+ttt_session_remove_from_list(struct ttt_session **list_start, struct ttt_session *target);
+
 #endif

@@ -25,6 +25,7 @@
 #include "discover.h"
 #include "session.h"
 #include "accept.h"
+#include "connect.h"
 
 /* Magic number of discovery datagram: "TTT1" */
 #define TTT_DISCOVER_MAGIC 0x54545431UL
@@ -382,6 +383,7 @@ tttdlctx_init(struct tttdlctx *ctx,
     ctx->announcement_cb_cookie = NULL;
     ctx->verbose = 0;
     ctx->address_families = TTT_IP_BOTH;
+    ctx->receivers[0] = ctx->receivers[1] = -1;
 
     return 0;
 
@@ -413,6 +415,7 @@ tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr, int ipv6) {
 
 void
 tttdlctx_destroy(struct tttdlctx *ctx) {
+    tttdlctx_receive_disable(ctx);
     free(ctx->secret);
     free(ctx->multicast_rendezvous_addr4);
     free(ctx->multicast_rendezvous_addr6);
@@ -449,24 +452,17 @@ tttdlctx_set_address_families(struct tttdlctx *ctx, int address_families) {
 }
 
 int
-tttdlctx_listen(struct tttdlctx *ctx,
-        struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
-        PORT *invitation_port_r) {
-    int rc;
-    int listener4 = -1, listener6 = -1;
-    int discovered = 0;
-    int sockets[2];
-
+tttdlctx_receive_enable(struct tttdlctx *ctx) {
     if (ctx->address_families & TTT_IPV4) {
-        listener4 = make_multicast_receiver(AF_INET, ctx->multicast_rendezvous_addr4, ctx->listen_port);
-        if (listener4 < 0) {
+        ctx->receivers[0] = make_multicast_receiver(AF_INET, ctx->multicast_rendezvous_addr4, ctx->listen_port);
+        if (ctx->receivers[0] < 0) {
             goto fail;
         }
     }
 
     if (ctx->address_families & TTT_IPV6) {
-        listener6 = make_multicast_receiver(AF_INET6, ctx->multicast_rendezvous_addr6, ctx->listen_port);
-        if (listener6 < 0) {
+        ctx->receivers[1] = make_multicast_receiver(AF_INET6, ctx->multicast_rendezvous_addr6, ctx->listen_port);
+        if (ctx->receivers[1] < 0) {
             goto fail;
         }
     }
@@ -476,9 +472,57 @@ tttdlctx_listen(struct tttdlctx *ctx,
          * we're now listening for announcements via UDP */
         ctx->listening_cb(ctx->listening_cb_cookie);
     }
+    return 0;
 
-    sockets[0] = listener4;
-    sockets[1] = listener6;
+fail:
+    for (int i = 0; i < 2; i++) {
+        if (ctx->receivers[i] >= 0) {
+            closesocket(ctx->receivers[i]);
+            ctx->receivers[i] = -1;
+        }
+    }
+    return -1;
+}
+
+void
+tttdlctx_receive_disable(struct tttdlctx *ctx) {
+    for (int i = 0; i < 2; i++) {
+        if (ctx->receivers[i] >= 0) {
+            multicast_interfaces_unsubscribe(ctx->receivers[i], i == 0 ? ctx->multicast_rendezvous_addr4 : ctx->multicast_rendezvous_addr6);
+            closesocket(ctx->receivers[i]);
+            ctx->receivers[i] = -1;
+        }
+    }
+}
+
+int
+tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set) {
+    int maxfd = -1;
+    for (int i = 0; i < 2; ++i) {
+        if (ctx->receivers[i] >= 0) {
+            FD_SET(ctx->receivers[i], set);
+            if (ctx->receivers[i] > maxfd)
+                maxfd = ctx->receivers[i];
+        }
+    }
+    return maxfd;
+}
+
+int
+tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set) {
+    for (int i = 0; i < 2; ++i) {
+        if (ctx->receivers[i] >= 0 && FD_ISSET(ctx->receivers[i], set))
+            return 1;
+    }
+    return 0;
+}
+
+int
+tttdlctx_receive(struct tttdlctx *ctx,
+        struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
+        PORT *invitation_port_r) {
+    int rc;
+    int discovered = 0;
 
     do {
         int maxfd = -1;
@@ -487,10 +531,10 @@ tttdlctx_listen(struct tttdlctx *ctx,
         /* Wait for messages on both the IPv4 and IPv6 socket */
         FD_ZERO(&readfds);
         for (int i = 0; i < 2; i++) {
-            if (sockets[i] >= 0) {
-                FD_SET(sockets[i], &readfds);
-                if (sockets[i] > maxfd)
-                    maxfd = sockets[i];
+            if (ctx->receivers[i] >= 0) {
+                FD_SET(ctx->receivers[i], &readfds);
+                if (ctx->receivers[i] > maxfd)
+                    maxfd = ctx->receivers[i];
             }
         }
         rc = select(maxfd + 1, &readfds, NULL, NULL, NULL);
@@ -504,7 +548,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
             char datagram[512];
             struct sockaddr_storage peer_addr;
             socklen_t addr_len = sizeof(peer_addr);
-            int listener = sockets[i];
+            int listener = ctx->receivers[i];
 
             if (listener < 0 || !FD_ISSET(listener, &readfds)) {
                 continue;
@@ -541,20 +585,7 @@ tttdlctx_listen(struct tttdlctx *ctx,
     else
         rc = -1;
 
-end:
-    if (listener4 >= 0) {
-        multicast_interfaces_unsubscribe(listener4, ctx->multicast_rendezvous_addr4);
-        closesocket(listener4);
-    }
-    if (listener6 >= 0) {
-        multicast_interfaces_unsubscribe(listener6, ctx->multicast_rendezvous_addr6);
-        closesocket(listener6);
-    }
     return rc;
-
-fail:
-    rc = -1;
-    goto end;
 }
 
 static int
@@ -575,6 +606,44 @@ make_dgram_addr_info(const char *multicast_rendezvous_addr, PORT announce_port, 
     return 0;
 }
 
+static int get_udp_protocol_number(void) {
+#ifdef WINDOWS
+    struct protoent *udp = getprotobyname("udp");
+    return udp->p_proto;
+#else
+    struct protoent *result;
+    struct protoent result_buf;
+    char *buf = NULL;
+    size_t buflen = 1024;
+    int rc;
+
+    buf = malloc(buflen);
+
+    errno = 0;
+    while ((rc = getprotobyname_r("udp", &result_buf, buf, buflen, &result)) != 0 && errno == ERANGE) {
+        char *new_buf = realloc(buf, buflen * 2);
+        if (new_buf) {
+            buflen *= 2;
+            buf = new_buf;
+        }
+        else {
+            free(buf);
+            return -1;
+        }
+    }
+
+    if (rc != 0) {
+        free(buf);
+        return -1;
+    }
+
+    rc = result->p_proto;
+    free(buf);
+
+    return rc;
+#endif
+}
+
 int
 tttdactx_init(struct tttdactx *ctx, int address_families, int address_types,
         const char *secret, size_t secret_length) {
@@ -585,6 +654,12 @@ tttdactx_init(struct tttdactx *ctx, int address_families, int address_types,
 #else
     const int one = 1;
 #endif
+    int udp_proto_number = get_udp_protocol_number();
+
+    if (udp_proto_number < 0) {
+        ttt_socket_error(0, "couldn't look up protocol number for UDP");
+        return -1;
+    }
 
     memset(ctx, 0, sizeof(*ctx));
 
@@ -634,7 +709,7 @@ tttdactx_init(struct tttdactx *ctx, int address_families, int address_types,
     /* Initialise sockets to send broadcast packets on... */
     for (struct ttt_netif *iface = ctx->broadcast_ifs; iface; iface = iface->next) {
         if (iface->bc_valid) {
-            iface->sock = socket(iface->family, SOCK_DGRAM, 0);
+            iface->sock = socket(iface->family, SOCK_DGRAM, udp_proto_number);
             if (iface->sock < 0) {
                 ttt_socket_error(0, "socket");
                 goto fail;
@@ -647,13 +722,21 @@ tttdactx_init(struct tttdactx *ctx, int address_families, int address_types,
             sockaddr_set_port((struct sockaddr *) &iface->bc_addr, ctx->announce_port);
         }
         if (iface->sock >= 0) {
+            /* Datagrams from this socket must come from this interface's
+             * address, so that if we have multiple addresses we sent an
+             * announcement from each address. */
+            if (bind(iface->sock, (struct sockaddr *) &iface->if_addr, iface->if_addr_len) < 0) {
+                ttt_socket_error(0, "failed to bind socket");
+                closesocket(iface->sock);
+                iface->sock = -1;
+            }
             num_valid_sockets++;
         }
     }
 
     /* ... and initialise sockets to send multicast packets on. */
     for (struct ttt_netif *iface = ctx->multicast_ifs; iface; iface = iface->next) {
-        iface->sock = socket(iface->family, SOCK_DGRAM, 0);
+        iface->sock = socket(iface->family, SOCK_DGRAM, udp_proto_number);
         if (iface->sock < 0) {
             ttt_socket_error(0, "socket");
             goto fail;
@@ -680,6 +763,14 @@ tttdactx_init(struct tttdactx *ctx, int address_families, int address_types,
             }
         }
         if (iface->sock >= 0) {
+            /* Datagrams from this socket must come from this interface's
+             * address, so that if we have multiple addresses we sent an
+             * announcement from each address. */
+            if (bind(iface->sock, (struct sockaddr *) &iface->if_addr, iface->if_addr_len) < 0) {
+                ttt_socket_error(0, "failed to bind socket");
+                closesocket(iface->sock);
+                iface->sock = -1;
+            }
             num_valid_sockets++;
         }
     }
@@ -874,81 +965,130 @@ ttt_discover_and_connect(const char *multicast_address_ipv4,
         tttdl_listening_cb listening_cb, void *listening_callback_cookie,
         tttdl_announcement_cb announcement_cb, void *announcement_callback_cookie,
         struct ttt_session *new_sess) {
-    struct tttdlctx ctx;
+    struct tttdlctx dlctx;
+    struct tttmcctx mcctx;
     int ctx_valid = 0;
     struct sockaddr_storage peer_addr;
     int peer_addr_len = sizeof(peer_addr);
     PORT peer_invitation_port;
-    const int use_tls = 1;
     int handshake_completed = 0;
     int rc;
 
     /* Initialise a discovery listen context */
-    memset(&ctx, 0, sizeof(ctx));
-    if (tttdlctx_init(&ctx, passphrase, passphrase_length) != 0) {
+    memset(&dlctx, 0, sizeof(dlctx));
+    if (tttdlctx_init(&dlctx, passphrase, passphrase_length) != 0) {
         ttt_error(0, 0, "failed to initialise listen context");
         return -1;
     }
     ctx_valid = 1;
 
+    /* Initialise a multi-connect context, which is a glorified list of
+     * partially-set-up non-blocking outgoing connection attempts. */
+    tttmcctx_init(&mcctx);
+    tttmcctx_set_verbose(&mcctx, verbose);
+
     /* Listen for UDP announcement datagrams on a well-known port */
     if (discover_port > 0) {
-        tttdlctx_set_port(&ctx, discover_port);
+        tttdlctx_set_port(&dlctx, discover_port);
     }
 
     /* If we're using any multicast addresses other than the defaults, set
      * them now. */
     if (multicast_address_ipv4) {
-        tttdlctx_set_multicast_addr(&ctx, multicast_address_ipv4, 0);
+        tttdlctx_set_multicast_addr(&dlctx, multicast_address_ipv4, 0);
     }
     if (multicast_address_ipv6) {
-        tttdlctx_set_multicast_addr(&ctx, multicast_address_ipv6, 1);
+        tttdlctx_set_multicast_addr(&dlctx, multicast_address_ipv6, 1);
     }
 
     /* Set up callbacks in the tttdlctx */
-    tttdlctx_set_listening_callback(&ctx, listening_cb);
-    tttdlctx_set_listening_callback_cookie(&ctx, listening_callback_cookie);
-    tttdlctx_set_announcement_callback(&ctx, announcement_cb);
-    tttdlctx_set_announcement_callback_cookie(&ctx, announcement_callback_cookie);
-    tttdlctx_set_verbose(&ctx, verbose);
-    tttdlctx_set_address_families(&ctx, address_families);
+    tttdlctx_set_listening_callback(&dlctx, listening_cb);
+    tttdlctx_set_listening_callback_cookie(&dlctx, listening_callback_cookie);
+    tttdlctx_set_announcement_callback(&dlctx, announcement_cb);
+    tttdlctx_set_announcement_callback_cookie(&dlctx, announcement_callback_cookie);
+    tttdlctx_set_verbose(&dlctx, verbose);
+    tttdlctx_set_address_families(&dlctx, address_families);
+
+    ttt_session_set_key(passphrase, passphrase_length);
+
+    if (tttdlctx_receive_enable(&dlctx) < 0) {
+        goto fail;
+    }
 
     do {
-        /* Listen until we receive a valid UDP datagram which was encrypted
-         * with our secret. This datagram, when decrypted, tells us which
-         * port to make a TCP connection to. */
-        rc = tttdlctx_listen(&ctx, &peer_addr, &peer_addr_len, &peer_invitation_port);
-        if (rc != 0) {
-            ttt_error(0, 0, "discover_listen failed.");
-            goto fail;
+        int max_receiver_fd, max_connector_fd, maxfd;
+        fd_set readfds, writefds, exceptfds;
+
+        FD_ZERO(&readfds);
+        FD_ZERO(&writefds);
+        FD_ZERO(&exceptfds);
+
+        max_receiver_fd = tttdlctx_fdset_add_receivers(&dlctx, &readfds);
+        max_connector_fd = tttmcctx_fdset_add_sockets(&mcctx, &writefds);
+        tttmcctx_fdset_add_sockets(&mcctx, &exceptfds);
+
+        if (max_receiver_fd > max_connector_fd)
+            maxfd = max_receiver_fd;
+        else
+            maxfd = max_connector_fd;
+
+        /* Wait for any new announcements (readfds) or any outgoing connection
+         * attempts which have finished (writefds/exceptfds). */
+        if (select(maxfd + 1, &readfds, &writefds, &exceptfds, NULL) < 0) {
+            ttt_error(0, 0, "select");
         }
 
-        /* Only call the listening callback once */
-        tttdlctx_set_listening_callback(&ctx, NULL);
+        if (tttdlctx_fdset_contains_receivers(&dlctx, &readfds)) {
+            /* Listen until we receive a valid UDP datagram which was encrypted
+             * with our secret. This datagram, when decrypted, tells us which
+             * port to make a TCP connection to. */
+            rc = tttdlctx_receive(&dlctx, &peer_addr, &peer_addr_len, &peer_invitation_port);
+            if (rc != 0) {
+                ttt_error(0, 0, "tttdctx_receive failed.");
+                goto fail;
+            }
 
-        /* Connect to the host that sent us the valid announcement on
-         * the port it specified, and send a message. */
-        ttt_session_set_key(passphrase, passphrase_length);
-        ttt_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
-        if (ttt_session_connect(new_sess, (struct sockaddr *) &peer_addr, peer_addr_len, use_tls) < 0) {
-            ttt_error(0, 0, "failed to connect");
+            /* Only call the listening callback once */
+            tttdlctx_set_listening_callback(&dlctx, NULL);
+
+            /* Connect to the host that sent us the valid announcement on
+             * the port it specified, by adding to our tttmcctx context. This
+             * will deal with multiple outgoing non-blocking connections. */
+            ttt_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
+            tttmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len);
         }
-        else if (ttt_session_handshake(new_sess) != 0) {
-            /* This socket is blocking, so ttt_session_handshake will either
-             * block and succeed, or fail permanently. It won't fail with
-             * want_read or want_write. */
-            ttt_error(0, 0, "handshake failed");
-            ttt_session_destroy(new_sess);
-        }
-        else {
-            handshake_completed = 1;
+
+        if (tttmcctx_fdset_contains_sockets(&mcctx, &writefds) ||
+                tttmcctx_fdset_contains_sockets(&mcctx, &exceptfds)) {
+            struct ttt_session *s = tttmcctx_run(&mcctx, &writefds, &exceptfds);
+            if (s != NULL) {
+                /* One of our outgoing connections successfully connected.
+                 * Now block waiting for the handshake to succeed or fail. */
+                if (ttt_session_handshake(s) != 0) {
+                    /* Handshake failed. Carry on waiting for announcements
+                     * and completion of outgoing connections. */
+                    ttt_error(0, 0, "handshake failed");
+                    ttt_session_destroy(s);
+                }
+                else {
+                    /* Handshake succeeded. This is our new session, and we'll
+                     * close all the others. */
+                    handshake_completed = 1;
+                    *new_sess = *s;
+                }
+
+                /* Either way, free the buffer containing the session. The
+                 * session has either been destroyed or copied to the caller. */
+                free(s);
+            }
         }
 
         /* If we couldn't connect or couldn't handshake with the host who
          * announced to us, go round and listen for announcements again. */
     } while (!handshake_completed);
 
-    tttdlctx_destroy(&ctx);
+    tttdlctx_destroy(&dlctx);
+    tttmcctx_destroy(&mcctx);
     ctx_valid = 0;
 
     /* If we get here, we have discovered our peer and successfully established
@@ -957,7 +1097,8 @@ ttt_discover_and_connect(const char *multicast_address_ipv4,
 
 fail:
     if (ctx_valid) {
-        tttdlctx_destroy(&ctx);
+        tttdlctx_destroy(&dlctx);
+        tttmcctx_destroy(&mcctx);
     }
     return -1;
 }

@@ -453,3 +453,20 @@ int
 ttt_session_set_key(const char *passphrase, size_t passphrase_len) {
     return ttt_passphrase_to_key(passphrase, passphrase_len, NULL, 0, ttt_session_key, sizeof(ttt_session_key));
 }
+
+void
+ttt_session_remove_from_list(struct ttt_session **list_start, struct ttt_session *target) {
+    struct ttt_session *prev = NULL;
+    for (struct ttt_session *cur = *list_start; cur; cur = cur->next) {
+        if (cur == target) {
+            if (prev == NULL) {
+                *list_start = cur->next;
+            }
+            else {
+                prev->next = cur->next;
+            }
+            break;
+        }
+        prev = cur;
+    }
+}

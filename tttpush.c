@@ -88,18 +88,18 @@ received_announcement_callback(void *cookie, const struct sockaddr *addr,
     char peer_port_str[20] = "?";
     int rc = 0;
 
-    if (valid || verbose) {
+    if (verbose) {
         rc = getnameinfo(addr, addr_len, peer_addr_str, sizeof(peer_addr_str),
                 peer_port_str, sizeof(peer_port_str), NI_NUMERICHOST | NI_NUMERICSERV);
         if (rc != 0) {
             ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
         }
-    }
-    if (valid) {
-        fprintf(stderr, "Found %s, invitation port %d\n", peer_addr_str, invitation_port);
-    }
-    else if (verbose) {
-        fprintf(stderr, "Rejected message from %s\n", peer_addr_str);
+        if (valid) {
+            fprintf(stderr, "Found %s, attempting connection to port %d...\n", peer_addr_str, invitation_port);
+        }
+        else {
+            fprintf(stderr, "Rejected message from %s\n", peer_addr_str);
+        }
     }
 }
 
