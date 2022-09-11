@@ -20,7 +20,11 @@ typedef void (*tttdl_announcement_cb)(void *, const struct sockaddr *, socklen_t
 struct tttdlctx {
     /* Address in the 239.x.x.x range which we subscribe to for
      * announcements. The announcing process must send to this address. */
-    char *multicast_rendezvous_addr;
+    char *multicast_rendezvous_addr4;
+
+    /* Address in the ff08:... rannge which we subscribe to for
+     * announcements on IPv6 multicast. */
+    char *multicast_rendezvous_addr6;
 
     /* Port on which to listen for announcements. */
     PORT listen_port;
@@ -28,6 +32,10 @@ struct tttdlctx {
     /* Shared secret, or passphrase, we use to decrypt a received datagram. */
     char *secret;
     size_t secret_length;
+
+    /* Whether to listen for datagrams on IPv4, IPv6, or both.
+     * Valid values are TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH. */
+    int address_families;
 
     /* If this is zero (the default) then we ignore datagrams which are not
      * encrypted. */
@@ -52,13 +60,29 @@ struct tttdlctx {
 struct tttdactx {
     /* The multicast address, in the 239.x.x.x range, which the listener
      * subscribes to and which the announcer sends to. */
-    char *multicast_rendezvous_addr;
+    char *multicast_rendezvous_addr4;
+
+    /* Address in the ff08:... rannge which we subscribe to for
+     * announcements on IPv6 multicast. */
+    char *multicast_rendezvous_addr6;
 
     /* Port on which to send announcements. */
     PORT announce_port;
 
+    /* Ports we're inviting hosts to connect on. */
+    PORT invitation_port4, invitation_port6;
+
+    /* TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH. */
+    int address_families;
+
+    /* TTT_ANNOUNCE_BROADCAST, TTT_ANNOUNCE_MULTICAST or TTT_ANNNOUNCE_BOTH. */
+    int address_types;
+
     /* Multicast rendezvous address converted to an addrinfo structure. */
-    struct addrinfo *multicast_rendezvous_addrinfo;
+    struct addrinfo *multicast_rendezvous_addrinfo4;
+
+    /* IPv6 multicast rendezvous address converted to an addrinfo. */
+    struct addrinfo *multicast_rendezvous_addrinfo6;
 
     /* The shared secret, or passphrase. */
     char *secret;
@@ -76,6 +100,13 @@ struct tttdactx {
 /* Initialise a discover-announce context with the given passphrase. This also
  * initialises a list of sockets.
  *
+ * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY or TTT_IP_BOTH.
+ * Specifies whether to announce on IPv4 interfaces, IPv6 interfaces, or both.
+ *
+ * address_types_flags: TTT_ANNOUNCE_MULTICAST_ONLY, TTT_ANNOUNCE_BROADCAST_ONLY
+ * or TTT_ANNOUNCE_BOTH. Specifies whether to announce by multicast, broadcast
+ * or both.
+ *
  * The caller may set options using tttdactx_set_port(),
  * tttdactx_set_multicast_ttl() etc before actually starting the announcement
  * stage using tttdactx_announce().
@@ -83,7 +114,8 @@ struct tttdactx {
  * Return 0 on success, or nonzero on error. We might return an error if there
  * are no suitable network interfaces, for example. */
 int
-tttdactx_init(struct tttdactx *ctx, const char *passphrase, size_t passphrase_length);
+tttdactx_init(struct tttdactx *ctx, int address_families_flags, 
+        int address_types_flags, const char *passphrase, size_t passphrase_length);
 
 /* Set the port number on which to send announcement datagrams.
  * The default is TTT_DEFAULT_DISCOVER_PORT. */
@@ -98,15 +130,18 @@ tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl);
 /* Send out an announcement datagram on every suitable network interface.
  * The datagram is encrypted with the passphrase. When decrypted by the
  * receiving host, it invites the decrypter to TCP-connect to us on the
- * invitation port number.
+ * invitation port number previously supplied with
+ * tttdactx_set_invitation_port(). If the invitation port for a particular
+ * address family is not set (or set to 0), no announcement is sent on sockets
+ * for that address family.
  *
  * It is the caller's responsibility to have already set up a listening socket
- * to listen on this invitation port. (Alternatively, see
+ * to listen on the invitation port. (Alternatively, see
  * ttt_discover_and_connect().)
  *
  * Return 0 on success or nonzero on failure. */
 int
-tttdactx_announce(struct tttdactx *ctx, PORT invitation_port);
+tttdactx_announce(struct tttdactx *ctx);
 
 /* Destroy a previously-initialise TTT discover-announce context and free any
  * resources associated with it. */
@@ -159,6 +194,12 @@ tttdlctx_set_announcement_callback_cookie(struct tttdlctx *ctx, void *cookie);
 void
 tttdlctx_set_verbose(struct tttdlctx *ctx, int value);
 
+/* Specify whether we should listen for announcement datagrams on IPv4,
+ * IPv6, or both. address_families must be TTT_IPV4_ONLY, TTT_IPV6_ONLY,
+ * or TTT_IPV6_BOTH.
+ */
+void
+tttdlctx_set_address_families(struct tttdlctx *ctx, int address_families);
 
 /* Listen for UDP datagrams on the discover port, on all suitable network
  * interfaces.
@@ -192,9 +233,14 @@ tttdlctx_destroy(struct tttdlctx *ctx);
  * our passphrase, and make a TCP connection to them, returning that in
  * *new_sess.
  *
- * multicast_address: the multicast address we expect to receive announcements
- *   on. If this is NULL we use the default, TTT_MULTICAST_RENDEZVOUS_ADDR.
- *   The other host must use the same address.
+ * multicast_address_ipv4, multicast_address_ipv6: the IPv4 and IPv6
+ *   multicast addresses we expect to receive announcements on. If this is NULL
+ *   we use the default, TTT_MULTICAST_RENDEZVOUS_ADDR and
+ *   TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. The other host must use the same
+ *   address.
+ *
+ * address_families: whether to listen for announcement datagrams on IPv4,
+ *   IPv6, or both. Set it to TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
  *
  * discover_port: the port on which we expect to receive announcement
  *   datagrams. If this is <= 0 we use TTT_DEFAULT_DISCOVER_PORT. The other
@@ -224,8 +270,10 @@ tttdlctx_destroy(struct tttdlctx *ctx);
  * handshook with the other end and created a ttt_session. Nonzero on failure.
  */
 int
-ttt_discover_and_connect(const char *multicast_address, int discover_port,
-        const char *passphrase, size_t passphrase_length, int verbose,
+ttt_discover_and_connect(const char *multicast_address_ipv4,
+        const char *multicast_address_ipv6, int address_families,
+        int discover_port, const char *passphrase, size_t passphrase_length,
+        int verbose,
         tttdl_listening_cb listening_cb, void *listening_callback_cookie,
         tttdl_announcement_cb announcement_cb, void *announcement_callback_cookie,
         struct ttt_session *new_sess);
@@ -239,9 +287,16 @@ ttt_discover_and_connect(const char *multicast_address, int discover_port,
  *
  * This is the "other side" to ttt_discover_and_connect().
  *
- * multicast_address: the multicast address to send announcements on. If this
- *   is NULL we use the default, TTT_MULTICAST_RENDEZVOUS_ADDR. The other host
- *   must use the same address.
+ * multicast_address_ipv4, multicast_address_ipv6: the IPv4 and IPv6
+ *   multicast addresses to send announcements on. If this is NULL we use the
+ *   default, TTT_MULTICAST_RENDEZVOUS_ADDR and
+ *   TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. The other host must use the same
+ *   address.
+ *
+ * address_families: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
+ *
+ * address_types: TTT_ANNOUNCE_BROADCAST_ONLY, TTT_ANNOUNCE_MULTICAST_ONLY, or
+ *   TTT_ANNOUNCE_BOTH.
  *
  * discover_port: the port on which to send announcements. If this is <= 0 we
  *   use TTT_DEFAULT_DISCOVER_PORT. The other host must use the same port.
@@ -278,8 +333,10 @@ ttt_discover_and_connect(const char *multicast_address, int discover_port,
  * successfully handshook with the other end. Return nonzero on failure.
  */
 int
-ttt_discover_and_accept(const char *multicast_address, int discover_port,
-        int max_announcements, int announcement_interval_ms, int multicast_ttl,
+ttt_discover_and_accept(const char *multicast_address_ipv4,
+        const char *multicast_address_ipv6, int address_families,
+        int address_types, int discover_port, int max_announcements,
+        int announcement_interval_ms, int multicast_ttl,
         const char *passphrase, size_t passphrase_length, int verbose,
         struct ttt_session *new_sess);
 

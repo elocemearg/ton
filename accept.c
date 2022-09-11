@@ -70,10 +70,12 @@ void
 tttacctx_destroy(struct tttacctx *ctx) {
     struct ttt_session *next;
 
-    if (ctx->listen_socket >= 0) {
-        closesocket(ctx->listen_socket);
+    if (ctx->listen_socket4 >= 0) {
+        closesocket(ctx->listen_socket4);
     }
-    freeaddrinfo(ctx->listen_addrinfo);
+    if (ctx->listen_socket6 >= 0) {
+        closesocket(ctx->listen_socket6);
+    }
 
     for (struct ttt_session *s = ctx->sessions; s; s = next) {
         next = s->next;
@@ -81,9 +83,10 @@ tttacctx_destroy(struct tttacctx *ctx) {
     }
 }
 
-int
-tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short listen_port, int use_tls) {
-    int rc;
+static int
+make_listening_socket(int address_family, const char *listen_addr,
+        unsigned short listen_port, struct sockaddr *sockaddr,
+        socklen_t *sockaddr_len) {
     char port_str[20];
     struct addrinfo hints;
 #ifdef WINDOWS
@@ -91,46 +94,32 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
 #else
     const int one = 1;
 #endif
-    struct sockaddr_storage addr;
-    socklen_t addrlen;
+    int listener = -1;
+    struct addrinfo *listen_addrinfo = NULL;
+    int rc;
 
-    memset(ctx, 0, sizeof(*ctx));
-    ctx->listen_socket = -1;
-    ctx->use_tls = use_tls;
-
-    /* We only listen on IPv4 (AF_INET) here, because on Windows if we set
-     * this to AF_UNSPEC we get an IPv6-only listen socket, which isn't much
-     * use if the other end tries to connect using IPv4.
-     *
-     * Perhaps we need two listening sockets listening on two different
-     * invitation ports, one IPv4, and one IPv6? Announcement datagrams can
-     * contain the port number appropriate to the address family used for
-     * the datagram.
-     * */
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family = address_family;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
     snprintf(port_str, sizeof(port_str), "%hu", listen_port);
 
-    rc = getaddrinfo(listen_addr, port_str, &hints, &ctx->listen_addrinfo);
+    rc = getaddrinfo(listen_addr, port_str, &hints, &listen_addrinfo);
     if (rc != 0) {
         ttt_error(0, 0, "tttacctx_init: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
     /* Create our listening socket. */
-    ctx->listen_socket = socket(ctx->listen_addrinfo->ai_family,
-            ctx->listen_addrinfo->ai_socktype,
-            ctx->listen_addrinfo->ai_protocol);
+    listener = socket(listen_addrinfo->ai_family, listen_addrinfo->ai_socktype, listen_addrinfo->ai_protocol);
     
-    if (ctx->listen_socket < 0) {
+    if (listener < 0) {
         ttt_socket_error(0, "tttacctx_init: socket");
         goto fail;
     }
 
-    rc = setsockopt(ctx->listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
+    rc = setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
     if (rc != 0) {
         ttt_socket_error(0, "tttacctx_init: setsockopt");
         goto fail;
@@ -138,38 +127,68 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short list
 
     /* Make the listening socket non-blocking, and bind it to the listen
      * address and port. */
-    ttt_make_socket_non_blocking(ctx->listen_socket);
+    ttt_make_socket_non_blocking(listener);
 
-    rc = bind(ctx->listen_socket, ctx->listen_addrinfo->ai_addr,
-            ctx->listen_addrinfo->ai_addrlen);
+    rc = bind(listener, listen_addrinfo->ai_addr, listen_addrinfo->ai_addrlen);
     if (rc != 0) {
         ttt_socket_error(0, "tttacctx_init: bind");
         goto fail;
     }
 
-    rc = listen(ctx->listen_socket, 10);
+    rc = listen(listener, 10);
     if (rc != 0) {
         ttt_socket_error(0, "tttacctx_init: listen");
         goto fail;
     }
 
-    addrlen = sizeof(addr);
-    rc = getsockname(ctx->listen_socket, (struct sockaddr *) &addr, &addrlen);
+    rc = getsockname(listener, sockaddr, sockaddr_len);
     if (rc != 0) {
         ttt_socket_error(0, "tttacctx_init: getsockname");
         goto fail;
     }
 
-    switch (((struct sockaddr *) &addr)->sa_family) {
-        case AF_INET:
-            ctx->listen_port = ntohs(((struct sockaddr_in *) &addr)->sin_port);
-            break;
-        case AF_INET6:
-            ctx->listen_port = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
-            break;
-        default:
-            ttt_error(0, 0, "unexpected socket address family: %d", (int) ((struct sockaddr *) &addr)->sa_family);
+end:
+    freeaddrinfo(listen_addrinfo);
+    return listener;
+
+fail:
+    if (listener >= 0) {
+        closesocket(listener);
+        listener = -1;
+    }
+    goto end;
+}
+
+int
+tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
+        const char *listen_addr6, int address_families,
+        unsigned short listen_port, int use_tls) {
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->listen_socket4 = -1;
+    ctx->listen_socket6 = -1;
+    ctx->use_tls = use_tls;
+
+    if (address_families & TTT_IPV4) {
+        addr_len = sizeof(addr);
+        ctx->listen_socket4 = make_listening_socket(AF_INET, listen_addr4,
+                listen_port, (struct sockaddr *) &addr, &addr_len);
+        if (ctx->listen_socket4 < 0) {
             goto fail;
+        }
+        ctx->listen_port4 = ntohs(((struct sockaddr_in *) &addr)->sin_port);
+    }
+
+    if (address_families & TTT_IPV6) {
+        addr_len = sizeof(addr);
+        ctx->listen_socket6 = make_listening_socket(AF_INET6, listen_addr6,
+                listen_port, (struct sockaddr *) &addr, &addr_len);
+        if (ctx->listen_socket6 < 0) {
+            goto fail;
+        }
+        ctx->listen_port6 = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
     }
 
     return 0;
@@ -196,8 +215,15 @@ timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *r
 }
 
 unsigned short
-tttacctx_get_listen_port(struct tttacctx *ctx) {
-    return ctx->listen_port;
+tttacctx_get_listen_port(struct tttacctx *ctx, int address_family) {
+    switch (address_family) {
+        case AF_INET:
+            return ctx->listen_port4;
+        case AF_INET6:
+            return ctx->listen_port6;
+        default:
+            return 0;
+    }
 }
 
 int
@@ -207,6 +233,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
     struct timeval end;
     struct ttt_session *chosen_session = NULL;
     int timed_out = 0;
+    int listeners[2];
 
     /* Set start to the time we're called, and end to the time which if
      * reached means we've timed out. */
@@ -218,19 +245,28 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         end.tv_sec++;
     }
     
+    listeners[0] = ctx->listen_socket4;
+    listeners[1] = ctx->listen_socket6;
+
     do {
         fd_set readsockets, writesockets;
-        int maxfd;
+        int maxfd = 0;
         struct timeval timeout, now;
 
         /* Set up readsockets and writesockets and add the sockets we want
-         * information about. ctx->listen_socket is always added to the
+         * information about. The listener sockets are always added to the
          * readsockets set. Sockets for pending sessions are added as
          * necessary. */
         FD_ZERO(&readsockets);
         FD_ZERO(&writesockets);
-        FD_SET(ctx->listen_socket, &readsockets);
-        maxfd = ctx->listen_socket;
+
+        for (int f = 0; f < 2; ++f) {
+            if (listeners[f] >= 0) {
+                FD_SET(listeners[f], &readsockets);
+                if (listeners[f] > maxfd)
+                    maxfd = listeners[f];
+            }
+        }
         for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
             if (s->want_read) {
                 /* We want to know when there's data to read on this socket */
@@ -263,30 +299,34 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         else {
             /* Activity! */
             struct ttt_session *next;
+
             /* Is there a new incoming connection? */
-            if (FD_ISSET(ctx->listen_socket, &readsockets)) {
-                struct sockaddr_storage addr;
-                socklen_t addr_len = sizeof(addr);
-                int new_socket = accept(ctx->listen_socket, (struct sockaddr *) &addr, &addr_len);
-                if (new_socket >= 0) {
-                    /* We have accepted a new connection. Add this to our
-                     * list of candidate sessions. */
-                    struct ttt_session *s = tttacctx_add_session(ctx, new_socket, (struct sockaddr *) &addr, addr_len);
-                    if (s != NULL) {
-                        /* Add this to both fdsets so that we try to handshake
-                         * with this session below. */
-                        s->want_read = 1;
-                        s->want_write = 1;
-                        FD_SET(s->sock, &readsockets);
-                        FD_SET(s->sock, &writesockets);
-                        ttt_make_socket_non_blocking(new_socket);
+            for (int f = 0; f < 2; f++) {
+                int listener = listeners[f];
+                if (FD_ISSET(listener, &readsockets)) {
+                    struct sockaddr_storage addr;
+                    socklen_t addr_len = sizeof(addr);
+                    int new_socket = accept(listener, (struct sockaddr *) &addr, &addr_len);
+                    if (new_socket >= 0) {
+                        /* We have accepted a new connection. Add this to our
+                         * list of candidate sessions. */
+                        struct ttt_session *s = tttacctx_add_session(ctx, new_socket, (struct sockaddr *) &addr, addr_len);
+                        if (s != NULL) {
+                            /* Add this to both fdsets so that we try to
+                             * handshake with this session below. */
+                            s->want_read = 1;
+                            s->want_write = 1;
+                            FD_SET(s->sock, &readsockets);
+                            FD_SET(s->sock, &writesockets);
+                            ttt_make_socket_non_blocking(new_socket);
+                        }
+                        else {
+                            closesocket(new_socket);
+                        }
                     }
                     else {
-                        closesocket(new_socket);
+                        ttt_socket_error(0, "accept");
                     }
-                }
-                else {
-                    ttt_socket_error(0, "accept");
                 }
             }
 
@@ -358,7 +398,7 @@ int main(int argc, char **argv) {
     int rc;
 
     /* Listen on port 12345 */
-    if (tttacctx_init(&ctx, NULL, 12345, 0)) {
+    if (tttacctx_init(&ctx, NULL, NULL, TTT_IP_BOTH, 12345, 0)) {
         ttt_error(1, 0, "tttacctx_init");
     }
 

@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Generated passphrase:\n%s\n", secret);
         }
 
-        rc = ttt_discover_and_connect(NULL, discover_port, secret,
-                strlen(secret), 1, NULL, NULL, NULL, NULL, &sess);
+        rc = ttt_discover_and_connect(NULL, NULL, TTT_IP_BOTH, discover_port,
+                secret, strlen(secret), 1, NULL, NULL, NULL, NULL, &sess);
         if (rc < 0) {
             ttt_error(1, 0, "failed to discover and connect to remote host");
         }
@@ -111,9 +111,9 @@ int main(int argc, char **argv) {
             secret = ttt_prompt_passphrase("Passphrase? ");
         }
 
-        rc = ttt_discover_and_accept(NULL, discover_port,
-                num_announcements, announcement_gap_ms, multicast_ttl,
-                secret, strlen(secret), 1, &tcp_session);
+        rc = ttt_discover_and_accept(NULL, NULL, TTT_IP_BOTH, TTT_ANNOUNCE_BOTH,
+                discover_port, num_announcements, announcement_gap_ms,
+                multicast_ttl, secret, strlen(secret), 1, &tcp_session);
         if (rc < 0) {
             ttt_error(1, 0, "failed to discover and accept connection");
         }

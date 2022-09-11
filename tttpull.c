@@ -17,7 +17,11 @@ enum main_pull_longopts {
     PULL_MULTICAST_TTL,
     PULL_MULTICAST_ADDRESS,
     PULL_PASSPHRASE_WORDS,
-    PULL_CONFIRM_FILE_SET
+    PULL_CONFIRM_FILE_SET,
+    PULL_NO_IPV4,
+    PULL_NO_IPV6,
+    PULL_NO_MULTICAST,
+    PULL_NO_BROADCAST
 };
 
 static const struct option longopts[] = {
@@ -30,6 +34,10 @@ static const struct option longopts[] = {
     { "output-dir", 1, NULL, 'o' },
     { "words", 1, NULL, PULL_PASSPHRASE_WORDS },
     { "confirm", 0, NULL, PULL_CONFIRM_FILE_SET },
+    { "no-ipv4", 0, NULL, PULL_NO_IPV4 },
+    { "no-ipv6", 0, NULL, PULL_NO_IPV6 },
+    { "no-multicast", 0, NULL, PULL_NO_MULTICAST },
+    { "no-broadcast", 0, NULL, PULL_NO_BROADCAST },
 
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -55,6 +63,10 @@ print_help(FILE *f) {
 "    --multicast-address <a>  Announce to multicast address <a> (default\n"
 "                               %s, pusher must use the same)\n"
 "    --multicast-ttl <n>      Set multicast TTL to <n> (default 1)\n"
+"    --no-broadcast           Do not announce to broadcast addresses\n"
+"    --no-multicast           Do not announce to multicast addresses\n"
+"    --no-ipv4                Do not use IPv4\n"
+"    --no-ipv6                Do not use IPv6\n"
 "    -o <dir>                 Destination directory for received file(s).\n"
 "                               Default is the current directory. The directory\n"
 "                               will be created if it doesn't exist.\n"
@@ -151,6 +163,8 @@ main_pull(int argc, char **argv) {
     int confirm_file_set = 0;
     char peer_addr[256] = "";
     char peer_port[20] = "";
+    int address_families = TTT_IP_BOTH;
+    int announce_types = TTT_ANNOUNCE_BOTH;
 
     while ((c = getopt_long(argc, argv, "ho:v", longopts, NULL)) != -1) {
         switch (c) {
@@ -195,6 +209,22 @@ main_pull(int argc, char **argv) {
                 confirm_file_set = 1;
                 break;
 
+            case PULL_NO_IPV4:
+                address_families &= ~TTT_IPV4;
+                break;
+
+            case PULL_NO_IPV6:
+                address_families &= ~TTT_IPV6;
+                break;
+
+            case PULL_NO_BROADCAST:
+                announce_types &= ~TTT_ANNOUNCE_BROADCAST;
+                break;
+
+            case PULL_NO_MULTICAST:
+                announce_types &= ~TTT_ANNOUNCE_MULTICAST;
+                break;
+
             case 'o':
                 output_dir = optarg;
                 break;
@@ -213,6 +243,14 @@ main_pull(int argc, char **argv) {
         }
     }
 
+    if (address_families == 0) {
+        ttt_error(1, 0, "--no-ipv4 and --no-ipv6 may not be combined");
+    }
+
+    if (announce_types == 0) {
+        ttt_error(1, 0, "--no-broadcast and --no-multicast may not be combined");
+    }
+
     if (passphrase == NULL) {
         /* No passphrase supplied, so prompt for one. */
         fprintf(stderr, "Enter the passphrase generated or specified on the pushing side.\n");
@@ -224,9 +262,10 @@ main_pull(int argc, char **argv) {
 
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */
-    if (ttt_discover_and_accept(multicast_address, discover_port,
-                max_announcements, announcement_interval_ms, multicast_ttl,
-                passphrase, strlen(passphrase), verbose, &sess) == 0) {
+    if (ttt_discover_and_accept(multicast_address, NULL, address_families,
+                announce_types, discover_port, max_announcements,
+                announcement_interval_ms, multicast_ttl, passphrase,
+                strlen(passphrase), verbose, &sess) == 0) {
         sess_valid = 1;
     }
     else {

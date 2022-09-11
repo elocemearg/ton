@@ -30,7 +30,8 @@
 #include <errno.h>
 #endif
 
-static struct ttt_netif *ttt_netif_new(void) {
+static struct ttt_netif *
+ttt_netif_new(void) {
     struct ttt_netif *iface = malloc(sizeof(struct ttt_netif));
     if (iface == NULL) {
         return NULL;
@@ -42,12 +43,14 @@ static struct ttt_netif *ttt_netif_new(void) {
 
 #ifdef UNIX
 static struct ttt_netif *
-get_if_addrs(unsigned int required_iff_flags, int include_ipv6) {
+get_if_addrs(int address_families_flags, unsigned int required_iff_flags) {
     struct ifaddrs *ifs = NULL;
     int rc = 0;
     struct ttt_netif *first = NULL;
     struct ttt_netif *last = NULL;
     int sock = -1;
+    struct addrinfo *ipv6_bcast = NULL;
+    struct addrinfo hints;
 
     rc = getifaddrs(&ifs);
     if (rc != 0) {
@@ -56,6 +59,17 @@ get_if_addrs(unsigned int required_iff_flags, int include_ipv6) {
 
     if (ifs == NULL) {
         return NULL;
+    }
+
+    /* Get the IPv6 broadcast address, which isn't really a broadcast address
+     * but we're going to call it one */
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET6;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+    rc = getaddrinfo("ff02::1", NULL, &hints, &ipv6_bcast);
+    if (rc != 0) {
+        ttt_error(0, 0, "getaddrinfo() failed on IPv6 address ff02::1: %s", gai_strerror(rc));
     }
 
     /* Get a socket so we can use ioctls - we won't use it to connect
@@ -67,8 +81,13 @@ get_if_addrs(unsigned int required_iff_flags, int include_ipv6) {
     }
 
     for (struct ifaddrs *iface = ifs; iface; iface = iface->ifa_next) {
+        /* Only look at those interfaces which match the capabilities we want,
+         * which have an address, and which are either AF_INET or AF_INET6
+         * where that address family is requested in address_families_flags. */
         if ((iface->ifa_flags & required_iff_flags) == required_iff_flags &&
-                iface->ifa_addr != NULL && (include_ipv6 || iface->ifa_addr->sa_family == AF_INET)) {
+                iface->ifa_addr != NULL &&
+                ((iface->ifa_addr->sa_family == AF_INET && (address_families_flags & TTT_IPV4) != 0) ||
+                 (iface->ifa_addr->sa_family == AF_INET6 && (address_families_flags & TTT_IPV6) != 0))) {
             struct ifreq ifreq;
             struct ttt_netif *netif = ttt_netif_new();
             int socklen;
@@ -80,12 +99,23 @@ get_if_addrs(unsigned int required_iff_flags, int include_ipv6) {
             netif->family = iface->ifa_addr->sa_family;
 
             if (iface->ifa_broadaddr != NULL) {
+                /* getifaddrs() tells us what the broadcast address is for
+                 * this interface. */
                 socklen = (iface->ifa_broadaddr->sa_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
                 memcpy(&netif->bc_addr, iface->ifa_broadaddr, socklen);
                 netif->bc_addr_len = socklen;
                 netif->bc_valid = 1;
             }
+            else if (netif->family == AF_INET6 && ipv6_bcast != NULL) {
+                /* If this is an IPv6 address, iface->ifa_broadaddr won't be
+                 * filled in but we use the standard IPv6 "all nodes on the
+                 * local network" address ff02::1 */
+                memcpy(&netif->bc_addr, ipv6_bcast->ai_addr, ipv6_bcast->ai_addrlen);
+                netif->bc_addr_len = ipv6_bcast->ai_addrlen;
+                netif->bc_valid = 1;
+            }
             else {
+                /* No broadcast address for this interface. */
                 netif->bc_addr_len = 0;
                 netif->bc_valid = 0;
             }
@@ -119,7 +149,10 @@ get_if_addrs(unsigned int required_iff_flags, int include_ipv6) {
     }
 
 end:
-    freeifaddrs(ifs);
+    if (ipv6_bcast != NULL)
+        freeaddrinfo(ipv6_bcast);
+    if (ifs != NULL)
+        freeifaddrs(ifs);
     return first;
 
 fail:
@@ -130,14 +163,14 @@ fail:
 }
 
 struct ttt_netif *
-ttt_get_multicast_ifs(void) {
-    return get_if_addrs(IFF_MULTICAST | IFF_UP, 0);
+ttt_get_multicast_ifs(int address_families_flags) {
+    return get_if_addrs(address_families_flags, IFF_MULTICAST | IFF_UP);
 }
 
 struct ttt_netif *
-ttt_get_broadcast_ifs(void) {
+ttt_get_broadcast_ifs(int address_families_flags) {
     /* IPv6 disabled for now until we can listen on both IPv4 and IPv6 */
-    return get_if_addrs(IFF_BROADCAST | IFF_UP, 0);
+    return get_if_addrs(address_families_flags, IFF_BROADCAST | IFF_UP);
 }
 #endif
 
@@ -155,7 +188,7 @@ is_useful_interface(IP_ADAPTER_ADDRESSES *addr, int multicast_only) {
 }
 
 static struct ttt_netif *
-get_if_addrs(int include_ipv6, int multicast_only) {
+get_if_addrs(int address_families_flags, int multicast_only) {
     IP_ADAPTER_ADDRESSES *addrs = NULL;
     ULONG addrs_size;
     ULONG ret;
@@ -171,8 +204,7 @@ get_if_addrs(int include_ipv6, int multicast_only) {
         return NULL;
 
     do {
-        ret = GetAdaptersAddresses(include_ipv6 ? AF_UNSPEC : AF_INET, 0,
-                NULL, addrs, &addrs_size);
+        ret = GetAdaptersAddresses(AF_UNSPEC, 0, NULL, addrs, &addrs_size);
         if (ret == ERROR_BUFFER_OVERFLOW) {
             IP_ADAPTER_ADDRESSES *new_addrs;
             addrs_size *= 2;
@@ -192,31 +224,50 @@ get_if_addrs(int include_ipv6, int multicast_only) {
 
     for (IP_ADAPTER_ADDRESSES *addr = addrs; addr; addr = addr->Next) {
         if (is_useful_interface(addr, multicast_only)) {
-            struct ttt_netif *netif;
-            PIP_ADAPTER_UNICAST_ADDRESS ua = addr->FirstUnicastAddress;
-            if (ua == NULL)
-                continue;
+            /* Iterate over all addresses assigned to this interface - there
+             * may be more than one, and they may be different address
+             * families. */
+            for (PIP_ADAPTER_UNICAST_ADDRESS ua = addr->FirstUnicastAddress; ua != NULL; ua = ua->Next) {
+                struct ttt_netif *netif;
 
-            netif = ttt_netif_new();
-            netif->family = ua->Address.lpSockaddr->sa_family;
-            netif->if_addr_len = ua->Address.iSockaddrLength;
-            memcpy(&netif->if_addr, ua->Address.lpSockaddr, netif->if_addr_len);
+                /* Check that the address family for this interface is
+                 * compatible with the address families we're accepting... */
+                if (ua->Address.lpSockaddr->sa_family == AF_INET) {
+                    if ((address_families_flags & TTT_IPV4) == 0)
+                        continue;
+                }
+                else if (ua->Address.lpSockaddr->sa_family == AF_INET6) {
+                    if ((address_families_flags & TTT_IPV6) == 0)
+                        continue;
+                }
+                else {
+                    /* Reject anything that isn't IPv4 or IPv6 */
+                    continue;
+                }
 
-            netif->bc_valid = 0;
-            netif->bc_addr_len = 0;
-            netif->if_index_ipv4 = addr->IfIndex;
-            netif->if_index_ipv6 = addr->Ipv6IfIndex;
-            netif->next = NULL;
+                /* If we get here, then this address of this interface is of
+                 * interest to us. Add it to the list of items we'll return. */
+                netif = ttt_netif_new();
+                netif->family = ua->Address.lpSockaddr->sa_family;
+                netif->if_addr_len = ua->Address.iSockaddrLength;
+                memcpy(&netif->if_addr, ua->Address.lpSockaddr, netif->if_addr_len);
 
-            if (first == NULL) {
-                first = netif;
-            }
-            if (last == NULL) {
-                last = netif;
-            }
-            else {
-                last->next = netif;
-                last = netif;
+                netif->bc_valid = 0;
+                netif->bc_addr_len = 0;
+                netif->if_index_ipv4 = addr->IfIndex;
+                netif->if_index_ipv6 = addr->Ipv6IfIndex;
+                netif->next = NULL;
+
+                if (first == NULL) {
+                    first = netif;
+                }
+                if (last == NULL) {
+                    last = netif;
+                }
+                else {
+                    last->next = netif;
+                    last = netif;
+                }
             }
         }
     }
@@ -225,15 +276,13 @@ get_if_addrs(int include_ipv6, int multicast_only) {
     return first;
 }
 
-/* Both of these functions could pass include_ipv6=1 to include IPv6 addresses,
- * but only when we fully support them by listening on IPv6 as well. */
 struct ttt_netif *
-ttt_get_multicast_ifs(void) {
-    return get_if_addrs(0, 1);
+ttt_get_multicast_ifs(int address_families_flags) {
+    return get_if_addrs(address_families_flags, 1);
 }
 
 struct ttt_netif *
-ttt_get_broadcast_ifs(void) {
+ttt_get_broadcast_ifs(int address_families_flags) {
     /* Only using multicast on Windows currently */
     return NULL;
 }
@@ -263,15 +312,12 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
     struct addrinfo *multicast_addr = NULL;
     int num_multicast_succeeded = 0;
     int rc;
+    struct ttt_netif *prev;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE;
-
-    if (multicast_addr_str) {
-        multicast_addr_str = TTT_MULTICAST_RENDEZVOUS_ADDR;
-    }
 
     rc = getaddrinfo(multicast_addr_str, NULL, &hints, &multicast_addr);
     if (rc != 0) {
@@ -279,14 +325,23 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
         return -1;
     }
 
+    if (multicast_addr->ai_family != AF_INET && multicast_addr->ai_family != AF_INET6) {
+        ttt_error(0, 0, "Multicast group address %s not recognised as IPv4 or IPv6 (ai_family %d)", multicast_addr_str, multicast_addr->ai_family);
+        freeaddrinfo(multicast_addr);
+        return -1;
+    }
+
     if (multicast_ifs == NULL) {
         errno = 0;
-        multicast_ifs = ttt_get_multicast_ifs();
+        /* This list will stick globally, so get both IPv4 and IPv6 interfaces
+         * regardless of what family multicast_addr is. */
+        multicast_ifs = ttt_get_multicast_ifs(TTT_IP_BOTH);
         if (multicast_ifs == NULL && errno != 0) {
             ttt_error(0, errno, "failed to get list of multicast interfaces");
         }
     }
 
+    prev = NULL;
     for (struct ttt_netif *netif = multicast_ifs; netif; netif = netif->next) {
         /* Go through every multicast-enabled interface and enable it to
          * receive multicast messages to multicast_addr_str.
@@ -302,12 +357,20 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
         }
         if (netif->family == AF_INET6 && multicast_addr->ai_family == AF_INET6) {
             struct ipv6_mreq group;
-            memcpy(&group.ipv6mr_multiaddr, &((struct sockaddr_in6 *) multicast_addr->ai_addr)->sin6_addr, sizeof(group.ipv6mr_multiaddr));
-            group.ipv6mr_interface = netif->if_index_ipv6;
-            if (setsockopt(sock, IPPROTO_IPV6, subscribe ? IPV6_ADD_MEMBERSHIP : IPV6_DROP_MEMBERSHIP, (char *) &group, sizeof(group)) == 0) {
-                num_multicast_succeeded++;
+            if (prev == NULL || prev->family != AF_INET6 || prev->if_index_ipv6 != netif->if_index_ipv6) {
+                /* Don't need to subscribe to the same multicast group for
+                 * every IPv6 address an interface has - just once per
+                 * interface is enough. If this interface is a different
+                 * address family or interface index number from the previous,
+                 * make the call to join the group with this interface. */
+                memcpy(&group.ipv6mr_multiaddr, &((struct sockaddr_in6 *) multicast_addr->ai_addr)->sin6_addr, sizeof(group.ipv6mr_multiaddr));
+                group.ipv6mr_interface = netif->if_index_ipv6;
+                if (setsockopt(sock, IPPROTO_IPV6, subscribe ? IPV6_ADD_MEMBERSHIP : IPV6_DROP_MEMBERSHIP, (char *) &group, sizeof(group)) == 0) {
+                    num_multicast_succeeded++;
+                }
             }
         }
+        prev = netif;
     }
     freeaddrinfo(multicast_addr);
 

@@ -17,6 +17,20 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+/* Address families bitmasks */
+#define TTT_IPV4 1
+#define TTT_IPV6 2
+#define TTT_IPV4_ONLY TTT_IPV4
+#define TTT_IPV6_ONLY TTT_IPV6
+#define TTT_IP_BOTH (TTT_IPV4 | TTT_IPV6)
+
+/* Address types bitmasks: broadcast, multicast or both */
+#define TTT_ANNOUNCE_BROADCAST 1
+#define TTT_ANNOUNCE_MULTICAST 2
+#define TTT_ANNOUNCE_BROADCAST_ONLY TTT_ANNOUNCE_BROADCAST
+#define TTT_ANNOUNCE_MULTICAST_ONLY TTT_ANNOUNCE_MULTICAST
+#define TTT_ANNOUNCE_BOTH (TTT_ANNOUNCE_BROADCAST | TTT_ANNOUNCE_MULTICAST)
+
 #ifdef WINDOWS
 #define PRINTF_INT64 "I64"
 #else

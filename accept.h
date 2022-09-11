@@ -8,9 +8,8 @@
 
 /* TTT accept connection context. */
 struct tttacctx {
-    int listen_socket;
-    struct addrinfo *listen_addrinfo;
-    unsigned short listen_port;
+    int listen_socket4, listen_socket6;
+    unsigned short listen_port4, listen_port6;
 
     int use_tls;
 
@@ -22,13 +21,15 @@ struct tttacctx {
 /* Create a context to accept the right connection. This opens a listening
  * socket. */
 int
-tttacctx_init(struct tttacctx *ctx, const char *listen_addr, unsigned short listen_port, int use_tls);
+tttacctx_init(struct tttacctx *ctx, const char *listen_addr_ipv4,
+        const char *listen_addr_ipv6, int address_families,
+        unsigned short listen_port, int use_tls);
 
 /* Get the port number on which this accept context is listening. Useful if
  * 0 was supplied to tttacctx_init() and now you want to know what actual
  * port number was allocated. */
 unsigned short
-tttacctx_get_listen_port(struct tttacctx *ctx);
+tttacctx_get_listen_port(struct tttacctx *ctx, int address_family);
 
 /* Accept the right connection. The right connection is the first one that
  * connects to our listening socket and successfully handshakes. For plain

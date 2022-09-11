@@ -60,18 +60,24 @@ struct ttt_netif {
 /* Get a list of all suitable network interfaces which support multicast.
  * We return a pointer to a linked list of struct ttt_netif.
  *
- * It is the caller's responsibility to pass the return value to
- * ttt_free_addrs() when it's no longer needed. */
-struct ttt_netif *
-ttt_get_multicast_ifs(void);
-
-/* Get a list of all suitable network interfaces which have a broadcast
- * address we can use. We return a pointer to a linked list of struct ttt_netif.
+ * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
+ * Tells the function we only want interfaces for these address families.
  *
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
 struct ttt_netif *
-ttt_get_broadcast_ifs(void);
+ttt_get_multicast_ifs(int address_families_flags);
+
+/* Get a list of all suitable network interfaces which have a broadcast
+ * address we can use. We return a pointer to a linked list of struct ttt_netif.
+ *
+ * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
+ * Tells the function we only want interfaces for these address families.
+ *
+ * It is the caller's responsibility to pass the return value to
+ * ttt_free_addrs() when it's no longer needed. */
+struct ttt_netif *
+ttt_get_broadcast_ifs(int address_families_flags);
 
 /* Free a list of interfaces previously returned by ttt_get_multicast_ifs()
  * or ttt_get_broadcast_ifs(). num_addrs must be the *num_ifaces value

@@ -25,7 +25,9 @@ enum main_push_longopts {
     PUSH_PASSPHRASE = 256,
     PUSH_DISCOVER_PORT,
     PUSH_MULTICAST_ADDRESS,
-    PUSH_SEND_FULL_METADATA
+    PUSH_SEND_FULL_METADATA,
+    PUSH_NO_IPV4,
+    PUSH_NO_IPV6
 };
 
 static const struct option longopts[] = {
@@ -33,6 +35,8 @@ static const struct option longopts[] = {
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
     { "multicast-address", 1, NULL, PUSH_MULTICAST_ADDRESS },
     { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
+    { "no-ipv4", 0, NULL, PUSH_NO_IPV4 },
+    { "no-ipv6", 0, NULL, PUSH_NO_IPV6 },
     { "words", 1, NULL, 'w' },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -53,6 +57,8 @@ print_help(FILE *f) {
 "    --help                   Show this help\n"
 "    --multicast-address <a>  Specify discovery multicast address (default\n"
 "                               %s, puller must use the same)\n"
+"    --no-ipv4                Do not use IPv4\n"
+"    --no-ipv6                Do not use IPv6\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
 "    --send-full-metadata     Send full metadata to receiver before transfer\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
@@ -114,6 +120,7 @@ main_push(int argc, char **argv) {
     char peer_addr[256] = "";
     char peer_port[20] = "";
     int generated_passphrase = 0;
+    int address_families = TTT_IP_BOTH;
 
     while ((c = getopt_long(argc, argv, "hvw:", longopts, NULL)) != -1) {
         switch (c) {
@@ -142,6 +149,14 @@ main_push(int argc, char **argv) {
                     passphrase_word_count = 1;
                 break;
 
+            case PUSH_NO_IPV4:
+                address_families &= ~TTT_IPV4;
+                break;
+
+            case PUSH_NO_IPV6:
+                address_families &= ~TTT_IPV6;
+                break;
+
             case 'h':
                 print_help(stdout);
                 exit(0);
@@ -159,6 +174,10 @@ main_push(int argc, char **argv) {
     if (optind >= argc) {
         print_help(stderr);
         exit(1);
+    }
+
+    if (address_families == 0) {
+        ttt_error(1, 0, "--no-ipv4 and --no-ipv6 may not be combined");
     }
 
     files_to_push = argv + optind;
@@ -186,8 +205,8 @@ main_push(int argc, char **argv) {
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
-    if (ttt_discover_and_connect(multicast_address, discover_port,
-                passphrase, strlen(passphrase), verbose,
+    if (ttt_discover_and_connect(multicast_address, NULL, address_families,
+                discover_port, passphrase, strlen(passphrase), verbose,
                 listening_callback, generated_passphrase ? passphrase : NULL,
                 received_announcement_callback, &verbose, &sess) == 0) {
         sess_valid = 1;
