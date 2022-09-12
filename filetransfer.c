@@ -92,7 +92,7 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
     int ret = 0;
     STAT st;
     if (ttt_stat(path, &st) < 0) {
-        ttt_error(0, errno, "%s", path);
+        ttt_error(0, errno, "skipping %s: stat failed", path);
         return 1;
     }
 
@@ -101,9 +101,10 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
         char *new_path = NULL;
         DIR *dir = opendir(path);
         struct dirent *ent = NULL;
+        long num_entries_in_dir = 0;
 
         if (dir == NULL) {
-            ttt_error(0, errno, "%s", path);
+            ttt_error(0, errno, "skipping directory %s", path);
             return 1;
         }
 
@@ -136,13 +137,23 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
             else if (subret < 0) {
                 ret = -1;
             }
+            num_entries_in_dir++;
             errno = 0;
         }
         free(new_path);
 
         if (ent == NULL && errno != 0) {
-            ttt_error(0, errno, "error reading directory entries in %s", path);
-            ret = -1;
+            if (num_entries_in_dir == 0) {
+                /* If we failed to read the first entry, then just skip this
+                 * directory, write a warning, and continue. Sometimes this
+                 * happens with phantom hidden directories on Windows. */
+                ttt_error(0, errno, "skipping directory %s, failed to read contents", path);
+                ret = 1;
+            }
+            else {
+                ttt_error(0, errno, "error reading directory entries in %s", path);
+                ret = -1;
+            }
         }
         closedir(dir);
     }
