@@ -83,11 +83,48 @@ ends_with_icase(const char *path, const char *ending) {
 }
 #endif
 
+static char *
+alloc_real_path_name(const char *path) {
+    char *real_path_name;
+    size_t len;
+#ifdef WINDOWS
+    real_path_name = _fullpath(NULL, path, 0);
+#else
+    real_path_name = realpath(path, NULL);
+#endif
+    if (real_path_name == NULL)
+        return NULL;
+
+    /* Remove any trailing directory separators, because Windows doesn't like
+     * it when you try to stat "c:\foo\bar\" - it prefers "c:\foo\bar".
+     *
+     * On Linux, don't remove the first character from the string, so that
+     * if all we have is "/", we keep that.
+     *
+     * On Windows, don't remove a backslash if it immediately follows a colon,
+     * so if we have "D:\", we want to keep it as "D:\" (the root directory
+     * of the D drive) not "D:" (our current directory on the D drive).
+     *
+     * We don't have to deal with the case where we have a drive letter and a
+     * relative path ("D:my\relative\path") because _fullpath() above has
+     * given us an absolute path.
+     */
+    len = strlen(real_path_name);
+    while (len > 1 && real_path_name[len - 1] == DIR_SEP) {
+#ifdef WINDOWS
+        if (real_path_name[len - 2] == ':')
+            break;
+#endif
+        real_path_name[--len] = '\0';
+    }
+    return real_path_name;
+}
+
 
 static int
-ttt_dir_walk_aux(const char *path, const char *initial_path,
+ttt_dir_walk_aux(const char *path, int orig_path_start,
         int (*callback)(void *cookie, const char *file_path, STAT *st,
-            const char *initial_path),
+            int orig_path_start),
         void *cookie) {
     int ret = 0;
     STAT st;
@@ -135,7 +172,7 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
             }
             join_paths(path, ent->d_name, new_path);
 
-            subret = ttt_dir_walk_aux(new_path, initial_path, callback, cookie);
+            subret = ttt_dir_walk_aux(new_path, orig_path_start, callback, cookie);
             if (subret > 0) {
                 ret = subret;
             }
@@ -162,21 +199,18 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
         }
         closedir(dir);
 
-        /* Finally, add an entry for the directory itself, if this is not the
-         * initial path.
+        /* Finally, add an entry for the directory itself.
          * We add this last because the receiving end must set the directory's
          * permissions *after* writing the directory's contents, to avoid
          * having to write files to a read-only directory. */
-        if (strcmp(path, initial_path) != 0) {
-            subret = callback(cookie, path, &st, initial_path);
-            if (subret < 0) {
-                ret = -1;
-            }
+        subret = callback(cookie, path, &st, orig_path_start);
+        if (subret < 0) {
+            ret = -1;
         }
     }
     else if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode)) {
         /* This is an ordinary file or FIFO. Call the callback on it. */
-        int cbret = callback(cookie, path, &st, initial_path);
+        int cbret = callback(cookie, path, &st, orig_path_start);
         if (cbret < 0) {
             ret = -1;
         }
@@ -194,28 +228,63 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
  * This may be useful to the callback function to derive a relative path from
  * the initial path to an individual file.
  *
- * The callback is called once for every file we find.
+ * The callback is called once for every file or directory entry we find.
  * The callback should return 0 normally, or -1 to terminate the walk with
  * an error. Its parameters are:
  *     void *cookie
  *         The cookie argument to ttt_dir_walk_aux. This has meaning
  *         only to the callback.
  *     char *file_path
- *         The path to the file we found. This always contains initial_path
- *         at its start.
+ *         The path to the file we found. In ttt_dir_walk_aux(), whatever
+ *         level of recursion depth, this always begins with the file_path
+ *         originally passed to the top-level ttt_dir_walk().
  *     STAT *st
  *         File metadata in the form of a struct stat or struct __stat64.
- *     char *initial_path
- *         The path supplied to the top-level call to ttt_dir_walk.
+ *     int orig_path_start
+ *         Offset in bytes from the start of path, pointing to the start of
+ *         the last component of the initial path supplied to ttt_dir_walk().
+ *         For example, if the initial path was "foo/bar/baz", orig_path_start
+ *         is 8, pointing to the start of "baz". Trailing slashes are ignored,
+ *         so if the initial path was "foo/bar/baz/", orig_path_start would
+ *         still be 8. If the initial path was "/", orig_path_start is 0.
  *
  * Return value is 0 on success, 1 if some files could not be statted, or -1
  * if there was a fatal error. */
 static int
 ttt_dir_walk(const char *path,
         int (*callback)(void *cookie, const char *file_path, STAT *st,
-            const char *initial_path),
+            int orig_path_start),
         void *cookie) {
-    return ttt_dir_walk_aux(path, path, callback, cookie);
+    int rc;
+    int pos;
+    char *full_path = alloc_real_path_name(path);
+    if (full_path == NULL) {
+        ttt_error(0, errno, "%s", path);
+        return -1;
+    }
+
+    /* If full_path is a file, point orig_path_start to the start of the file's
+     * basename.
+     * If full_path is "/", orig_path_start is 1.
+     * If full_path is a directory, point orig_path_start to the start of the
+     * last directory component of the path. */
+    pos = strlen(full_path);
+    if (pos > 0)
+        --pos;
+
+    /* Find the last directory separator, and we want to point to the character
+     * after it. */
+    while (pos > 0 && full_path[pos] != DIR_SEP)
+        pos--;
+
+    if (full_path[pos] == DIR_SEP)
+        pos++;
+
+    rc = ttt_dir_walk_aux(full_path, pos, callback, cookie);
+
+    free(full_path);
+
+    return rc;
 }
 
 /*
@@ -223,41 +292,23 @@ ttt_dir_walk(const char *path,
  * sending in a file transfer session.
  *
  * The returned TTT path:
- *     * is relative to initial_path if that is a directory, otherwise it is
- *       relative to the directory containing the file named in initial_path,
  *     * has directory components separated by slash ('/') regardless of what
  *       the local operating system's directory separator is, and
  *     * does not begin with a slash.
  *
  * The returned path is allocated by malloc() and it is the caller's
  * responsibility to free() it.
- *
- * ("alpha/bravo/charlie/delta.txt", "alpha/bravo") => "charlie/delta.txt"
- * ("./alpha/bravo/charlie.txt", ".") => "alpha/bravo/charlie.txt"
- * ("alpha/bravo.txt", "alpha") => "bravo.txt"
- * ("alpha/bravo/charlie.txt", "alpha/bravo/charlie.txt") => "charlie.txt"
- * ("alpha/../bravo//charlie/delta.txt", "alpha/../bravo") => "charlie/delta.txt"
  */
 static char *
-local_path_to_ttt_path(const char *path, const char *initial_path) {
+local_path_to_ttt_path(const char *path) {
     char *ttt_path;
-    int start;
-    if (strncmp(path, initial_path, strlen(initial_path)) == 0) {
-        start = strlen(initial_path);
-    }
-    else {
-        start = 0;
-    }
-    if (start > 0 && path[start] != DIR_SEP) {
-        /* Go back to the last directory separator before this point */
-        for (--start; start > 0 && path[start] != DIR_SEP; --start);
-    }
-    /* Then position ourselves immediately after this directory separator */
-    while (path[start] == DIR_SEP)
-        ++start;
+
+    /* Skip any leading slashes */
+    while (*path == DIR_SEP)
+        path++;
 
     /* Take all the path components after this point. */
-    ttt_path = strdup(path + start);
+    ttt_path = strdup(path);
     if (ttt_path == NULL) {
         ttt_error(0, errno, "strdup");
         return NULL;
@@ -455,9 +506,9 @@ fail:
 
 /* ttt_dir_walk() callback function used by ttt_file_transfer_session_sender().
  * Adds a ttt_file object for the named file to a list (=cookie), deriving
- * the ttt_file object's ttt_path fields from path and initial_path. */
+ * the ttt_file object's ttt_path fields from path and orig_path_start. */
 static int
-add_local_file_to_list(void *cookie, const char *path, STAT *st, const char *initial_path) {
+add_local_file_to_list(void *cookie, const char *path, STAT *st, int orig_path_start) {
     struct ttt_file_list *list = (struct ttt_file_list *) cookie;
     struct ttt_file *file = NULL;
 
@@ -468,7 +519,7 @@ add_local_file_to_list(void *cookie, const char *path, STAT *st, const char *ini
     }
     file->next = NULL;
 
-    file->ttt_path = local_path_to_ttt_path(path, initial_path);
+    file->ttt_path = local_path_to_ttt_path(path + orig_path_start);
     if (file->ttt_path == NULL) {
         ttt_file_free(file);
         return -1;
