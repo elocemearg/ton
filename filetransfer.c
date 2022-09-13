@@ -96,12 +96,18 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
         return 1;
     }
 
+    /* If it's not a regular file, set the size to 0. */
+    if (!S_ISREG(st.st_mode)) {
+        st.st_size = 0;
+    }
+
     if (S_ISDIR(st.st_mode)) {
         /* This is a directory. Recursively walk each of its children. */
         char *new_path = NULL;
         DIR *dir = opendir(path);
         struct dirent *ent = NULL;
         long num_entries_in_dir = 0;
+        int subret;
 
         if (dir == NULL) {
             ttt_error(0, errno, "skipping directory %s", path);
@@ -115,11 +121,10 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
         }
         errno = 0;
         while (ret >= 0 && (ent = readdir(dir)) != NULL) {
-            int subret;
-
             if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
                 continue;
 #ifdef WINDOWS
+            /* Skip Windows shortcuts */
             if (ends_with_icase(ent->d_name, ".lnk"))
                 continue;
 #endif
@@ -156,16 +161,28 @@ ttt_dir_walk_aux(const char *path, const char *initial_path,
             }
         }
         closedir(dir);
+
+        /* Finally, add an entry for the directory itself, if this is not the
+         * initial path.
+         * We add this last because the receiving end must set the directory's
+         * permissions *after* writing the directory's contents, to avoid
+         * having to write files to a read-only directory. */
+        if (strcmp(path, initial_path) != 0) {
+            subret = callback(cookie, path, &st, initial_path);
+            if (subret < 0) {
+                ret = -1;
+            }
+        }
     }
-    else if (S_ISREG(st.st_mode)) {
-        /* This is an ordinary file. Call the callback for it. */
+    else if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode)) {
+        /* This is an ordinary file or FIFO. Call the callback on it. */
         int cbret = callback(cookie, path, &st, initial_path);
         if (cbret < 0) {
             ret = -1;
         }
     }
 
-    /* Don't bother with special files such as symlinks (yet), sockets,
+    /* Don't bother with special files such as symlinks, Unix sockets,
      * device files, etc. */
 
     return ret;
@@ -257,8 +274,34 @@ local_path_to_ttt_path(const char *path, const char *initial_path) {
     return ttt_path;
 }
 
+#ifdef WINDOWS
+
+/* p is a string containing a slash-delimited path.
+ *
+ * If the directory component pointed to by p is legal under Windows then
+ * leave it alone, otherwise change it to replace any problematic characters
+ * with underscores.
+ *
+ * Return a pointer to the next directory separator of the possibly-modified
+ * string, or a pointer to the string's null-terminator if there is no
+ * next directory separator. */
+static char *
+make_dir_component_legal_on_windows(char *p) {
+    int pos;
+    for (pos = 0; p[pos] != '/' && p[pos] != '\0'; ++pos) {
+        unsigned char c = (unsigned char) (p[pos]);
+        if (c < 32 || strchr("<>:\"\\|?*", c) != NULL) {
+            c = '_';
+        }
+        p[pos] = (char) c;
+    }
+    return p + pos;
+}
+#endif
+
 /* Convert a path received over a TTT file transfer session to a local
- * path name. It is the opposite of local_path_to_ttt_path().
+ * path name. It is the opposite of local_path_to_ttt_path(). If the resulting
+ * local filename would be illegal, make it legal.
  *
  * path: the TTT path to convert, which must use slashes as delimiters and
  *       not begin with a slash.
@@ -278,22 +321,63 @@ local_path_to_ttt_path(const char *path, const char *initial_path) {
  * ("alpha/bravo.txt", ".") => "./alpha/bravo.txt"
  */
 static char *
-ttt_path_to_local_path(const char *path, const char *local_base_dir) {
-    char *new_path = malloc(strlen(local_base_dir) + 1 + strlen(path) + 1);
-    if (new_path == NULL)
+ttt_path_to_local_path(const char *ttt_path, const char *local_base_dir) {
+    char *full_path = NULL; /* local_base_dir joined to localised path */
+    char *localised_path = NULL; /* path with any problematic characters replaced */
+
+#ifdef WINDOWS
+    char *path_ptr;
+    int r, w;
+
+    /* Skip any leading slashes */
+    while (*ttt_path == '/')
+        ttt_path++;
+
+    localised_path = strdup(ttt_path);
+    if (localised_path == NULL)
         return NULL;
 
-    while (*path == '/')
-        path++;
-
-    join_paths(local_base_dir, path, new_path);
-    if (DIR_SEP != '/') {
-        for (size_t i = strlen(local_base_dir); new_path[i]; i++) {
-            if (new_path[i] == '/')
-                new_path[i] = DIR_SEP;
+    /* First, if we have any repeated slashes, condense them down into one
+     * like a directory-separating accordion. */
+    strcpy(localised_path, ttt_path);
+    r = 0;
+    w = 0;
+    for (; localised_path[r]; r++) {
+        char c = localised_path[r];
+        if (c != '/' || (r > 0 && localised_path[r - 1] != '/')) {
+            localised_path[w++] = c;
         }
     }
-    return new_path;
+    localised_path[w] = '\0';
+
+    /* Fix every directory component, replacing the separators with
+     * backslashes as we go */
+    path_ptr = localised_path;
+    while (*path_ptr) {
+        path_ptr = make_dir_component_legal_on_windows(path_ptr);
+        if (*path_ptr == '/') {
+            *path_ptr = '\\';
+            path_ptr++;
+        }
+    }
+#else
+    /* ttt_path is already a valid Unix-style path delimited by slashes. */
+    localised_path = strdup(ttt_path);
+    if (localised_path == NULL)
+        return NULL;
+#endif
+
+    full_path = malloc(strlen(local_base_dir) + 1 + strlen(localised_path) + 1);
+    if (full_path == NULL) {
+        free(localised_path);
+        return NULL;
+    }
+
+    join_paths(local_base_dir, localised_path, full_path);
+
+    free(localised_path);
+
+    return full_path;
 }
 
 /* Functions to create and destroy ttt_file and ttt_file_list objects... */
@@ -762,7 +846,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         long long *total_size, long num_files_skipped, struct ttt_file *f,
         int *file_failed) {
     struct ttt_msg msg;
-    FILE *stream;
+    FILE *stream = NULL;
     size_t bytes_read = 0;
     int return_value = 0;
     long long file_position = 0;
@@ -774,84 +858,94 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         goto fail;
     }
 
-    /* Open the file we want to send. If this fails, tell the receiver that
-     * there will be no data for this file and that we failed to send it. */
-    stream = fopen(f->local_path, "rb");
-    if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
-        fclose(stream);
-        stream = NULL;
-        errno = EPERM;
-    }
-    if (stream == NULL) {
-        int err = errno;
-        ttt_error(0, err, "%s", f->local_path);
-        if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
-            goto fail;
-        *file_failed = 1;
-        return 0;
-    }
-
-    /* Now read the whole file in ttt_msg-sized chunks, and send them to
-     * the receiver. */
-    do {
-        void *msg_data_dest;
-        int max_length;
-
-        /* Initialise a file data chunk */
-        ttt_msg_file_data_chunk(&msg);
-
-        max_length = ttt_msg_file_data_chunk_get_max_length(&msg);
-        msg_data_dest = ttt_msg_file_data_chunk_data_ptr(&msg);
-
-        /* Read up to max_length bytes from the file into the message */
-        errno = 0;
-        bytes_read = fread(msg_data_dest, 1, max_length, stream);
-        if (ttt_random_file_read_failures && bytes_read != 0 && rand() % 100 == 0) {
-            bytes_read = 0;
-            errno = EIO;
+    if (S_ISREG(f->mode)) {
+        /* This is a regular file.
+         * Open the file we want to send. If this fails, tell the receiver that
+         * there will be no data for this file and that we failed to send it. */
+        stream = fopen(f->local_path, "rb");
+        if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
+            fclose(stream);
+            stream = NULL;
+            errno = EPERM;
         }
-        if (bytes_read == 0) {
-            /* End of file or error... */
-            if (ferror(stream) || (ttt_random_file_read_failures && errno == EIO)) {
-                /* Error reading from the file. Send a TTT_MSG_FILE_DATA_END
-                 * message with an error code, to tell the receiver this file
-                 * failed to send. The session continues. */
-                int err = errno;
-                ttt_error(0, err, "%s", f->local_path);
-                *file_failed = 1;
-                if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
-                    goto fail;
+        if (stream == NULL) {
+            int err = errno;
+            ttt_error(0, err, "%s", f->local_path);
+            if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
+                goto fail;
+            *file_failed = 1;
+            return 0;
+        }
+
+        /* Now read the whole file in ttt_msg-sized chunks, and send them to
+         * the receiver. */
+        do {
+            void *msg_data_dest;
+            int max_length;
+
+            /* Initialise a file data chunk */
+            ttt_msg_file_data_chunk(&msg);
+
+            max_length = ttt_msg_file_data_chunk_get_max_length(&msg);
+            msg_data_dest = ttt_msg_file_data_chunk_data_ptr(&msg);
+
+            /* Read up to max_length bytes from the file into the message */
+            errno = 0;
+            bytes_read = fread(msg_data_dest, 1, max_length, stream);
+            if (ttt_random_file_read_failures && bytes_read != 0 && rand() % 100 == 0) {
+                bytes_read = 0;
+                errno = EIO;
+            }
+            if (bytes_read == 0) {
+                /* End of file or error... */
+                if (ferror(stream) || (ttt_random_file_read_failures && errno == EIO)) {
+                    /* Error reading from the file. Send a TTT_MSG_FILE_DATA_END
+                     * message with an error code, to tell the receiver this
+                     * file failed to send. The session continues. */
+                    int err = errno;
+                    ttt_error(0, err, "%s", f->local_path);
+                    *file_failed = 1;
+                    if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
+                        goto fail;
+                    }
+                    *total_size -= f->size - file_position;
                 }
-                *total_size -= f->size - file_position;
+                else {
+                    /* End of file. We read and sent everything successfully. */
+                    if (ttt_send_file_data_end(sess, 0, NULL) != 0)
+                        goto fail;
+                }
             }
             else {
-                /* End of file. We read and sent everything successfully. */
-                if (ttt_send_file_data_end(sess, 0, NULL) != 0)
+                /* Set the length field of the chunk message... */
+                ttt_msg_file_data_chunk_set_length(&msg, (int) bytes_read);
+
+                /* Now send the chunk message */
+                if (ttt_msg_send(sess, &msg) < 0)
                     goto fail;
+
+                file_position += bytes_read;
+                *bytes_sent_so_far += bytes_read;
             }
-        }
-        else {
-            /* Set the length field of the chunk message... */
-            ttt_msg_file_data_chunk_set_length(&msg, (int) bytes_read);
 
-            /* Now send the chunk message */
-            if (ttt_msg_send(sess, &msg) < 0)
-                goto fail;
+            /* Update the progress indicator if necessary */
+            if (is_progress_report_due(ctx)) {
+                make_progress_report(ctx, 1, f->local_path, file_number,
+                        file_count, file_position, f->size, *bytes_sent_so_far,
+                        *total_size, num_files_skipped, 0);
+            }
 
-            file_position += bytes_read;
-            *bytes_sent_so_far += bytes_read;
-        }
-
-        /* Update the progress indicator if necessary */
-        if (is_progress_report_due(ctx)) {
-            make_progress_report(ctx, 1, f->local_path, file_number,
-                    file_count, file_position, f->size, *bytes_sent_so_far,
-                    *total_size, num_files_skipped, 0);
-        }
-
-        /* Keep going until we reach the end of the file or we fail to
-         * read some of it. */
-    } while (bytes_read > 0);
+            /* Keep going until we reach the end of the file or we fail to
+             * read some of it. */
+        } while (bytes_read > 0);
+    }
+    else {
+        /* This is some other kind of file, like a directory or FIFO. There's
+         * no data associated with this file, so behave like it's a zero-byte
+         * file and send an "end of data" message. */
+        if (ttt_send_file_data_end(sess, 0, NULL) != 0)
+            goto fail;
+    }
 
 end:
     if (stream)
@@ -1260,10 +1354,35 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     }
                 }
             }
+#ifndef WINDOWS
+            else if (S_ISFIFO(current_file_mode)) {
+                /* Create a FIFO, creating its containing directories if necessary. */
+                if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
+                    if (errno == ENOENT) {
+                        if (ttt_mkdir_parents(local_filename, 0777, 1, DIR_SEP) < 0) {
+                            int err = errno;
+                            ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
+                            ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
+                            goto fail;
+                        }
+
+                        if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
+                            ttt_error(0, errno, "skipping fifo %s", local_filename);
+                        }
+                    }
+                }
+            }
+#endif
             else if (S_ISDIR(current_file_mode)) {
-                /* This is a directory entry, so create it. */
-                if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, 0, DIR_SEP) < 0) {
-                    ttt_error(0, errno, "failed to create directory %s", local_filename);
+                /* This is a directory entry. It arrives *after* any files it
+                 * contains, so it should already exist unless it contains no
+                 * files. Create the directory if we haven't already.
+                 * When we get the TTT_MSG_FILE_DATA_END message, we'll set
+                 * its timestamp and permissions. */
+                if (access(local_filename, F_OK) != 0) {
+                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, 0, DIR_SEP) < 0) {
+                        ttt_error(0, errno, "failed to create directory %s", local_filename);
+                    }
                 }
             }
         }
@@ -1304,7 +1423,6 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
              * is zero, we have the complete file, otherwise the sender is
              * telling us there's been a problem. Either way, we want to
              * close our current file. */
-            struct utimbuf timbuf;
             if (!in_file_transfer) {
                 /* TTT_MSG_FILE_DATA_END sent at the wrong point! */
                 ttt_error(0, 0, "TTT_MSG_FILE_DATA_END sent without TTT_MSG_FILE_METADATA!");
@@ -1332,14 +1450,21 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Sender reports that it sent the file successfully.
                  * Set the file's mode and timestamp according to the metadata
                  * message we received before the file data. */
-                timbuf.actime = time(NULL);
-                timbuf.modtime = current_file_mtime;
-                if (utime(local_filename, &timbuf) < 0) {
-                    ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+#ifdef WINDOWS
+                /* utime() can't set a directory's modification time on Windows */
+                if (!S_ISDIR(current_file_mode))
+#endif
+                {
+                    struct utimbuf timbuf;
+                    timbuf.actime = time(NULL);
+                    timbuf.modtime = current_file_mtime;
+                    if (utime(local_filename, &timbuf) < 0) {
+                        ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                    }
                 }
 
-                if (ttt_chmod(local_filename, current_file_mode & 0777) < 0) {
-                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 0777, local_filename);
+                if (ttt_chmod(local_filename, current_file_mode & 07777) < 0) {
+                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 07777, local_filename);
                 }
             }
             else {
@@ -1352,7 +1477,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
 
                 /* Don't expect the rest of this file */
                 total_bytes_remaining -= current_file_size - current_file_position;
-                ttt_error(0, 0, "warning: did not receive %s: %s", local_filename, decoded.u.err.message);
+                ttt_error(0, 0, "warning: sender skipped %s: %s", local_filename, decoded.u.err.message);
             }
 
             /* We're no longer inside a file transfer, so the next message

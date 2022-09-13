@@ -136,7 +136,8 @@
  *               0          8     int64    File size in bytes. -1 if unknown.
  *               8          8     time_t   Modification time of file, as a
  *                                         Unix timestamp. 0 if unknown.
- *              16          4     int32    File mode/permissions.
+ *              16          4     int32    File mode/permissions, as in the
+ *                                         st_mode field of struct stat.
  *              20   variable     string   File name as a '\0'-terminated
  *                                         string. This is a relative path with
  *                                         directory components delimited by
