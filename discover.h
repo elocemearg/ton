@@ -8,13 +8,76 @@
 
 typedef uint16_t PORT;
 
-/* Callback function which tttdlctx_listen will call to say it's successfully
+/* Callback function which tttdlctx_receive will call to say it's successfully
  * set things up and is now waiting for announcements. */
 typedef void (*tttdl_listening_cb)(void *);
 
 /* Callback to tell the caller when we receive an announcement datagram,
  * valid or not */
 typedef void (*tttdl_announcement_cb)(void *, const struct sockaddr *, socklen_t, int valid, int invitation_port);
+
+/* Options struct for ttt_discover_and_connect() and ttt_discover_and_accept(),
+ * the two functions called by the pushing and pulling side respectively to
+ * find each other and set up a TCP connection. */
+struct ttt_discover_options {
+    /* The passphrase with which to generate the key to encrypt and decrypt
+     * announcement datagrams, and to use as a pre-shared key with the TLS
+     * session we set up on the connection. */
+    char *passphrase;
+    int passphrase_length;
+
+    /* multicast_address_ipv4, multicast_address_ipv6: the IPv4 and IPv6
+     * multicast addresses we expect to receive announcements on. If this is
+     * NULL we use the default, TTT_MULTICAST_RENDEZVOUS_ADDR and
+     * TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. The other host must use the same
+     * address. */
+    char *multicast_address_ipv4;
+    char *multicast_address_ipv6;
+
+    /* address_families: whether to listen for announcement datagrams on IPv4,
+       IPv6, or both. Set it to TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH. */
+    int address_families;
+
+    /* announcement_types: for ttt_discover_and_accept(), whether to send out
+     * the announcement messages using broadcast, multicast, or both. Set it to
+     * TTT_ANNOUNCE_BROADCAST, TTT_ANNOUNCE_MULTICAST or TTT_ANNOUNCE_BOTH. */
+    int announcement_types;
+
+    /* The UDP port on which to send or receive announcement datagrams. The
+     * default is TTT_DEFAULT_DISCOVER_PORT, and both ends must use the same. */
+    int discover_port;
+
+    /* Be less economical with ttt_error(). */
+    int verbose;
+
+    /* listening_cb: callback to call when we start listening for announcement
+     * packet. We call tttdlctx_set_listening_cb() with this, using the
+     * discover-listen context we set up.
+     * If NULL, the callback is not used. */
+    tttdl_listening_cb listening_cb;
+    void *listening_cb_cookie;
+
+    /* announcement_cb: callback to call when we receive an announcement
+     * datagram, valid or not. See tttdlctx_set_announcement_cb().
+     * If NULL, the callback is not used. */
+    tttdl_announcement_cb announcement_cb;
+    void *announcement_cb_cookie;
+
+    /* The maximum number of announcements to send on each suitable network
+     * interface. If we send this many announcements and we still don't get a
+     * valid incoming TCP connection, we fail. */
+    int max_announcements;
+
+    /* The number of milliseconds to wait between annoucements, during which we
+     * wait for incoming connections on our listening socket. */
+    int announcement_interval_ms;
+
+    /* The TTL or hop limit to set on our multicast announcement datagrams.
+     * Warning: the ip(7) man page strongly warns against setting this to
+     * anything higher than it needs to be. The recommended value is 0, which
+     * leaves it at the default (1 for IPv4, route default for IPv6). */
+    int multicast_ttl;
+};
 
 /* TTT discovery listen context */
 struct tttdlctx {
@@ -29,34 +92,9 @@ struct tttdlctx {
     /* IPv4 and IPv6 receiving sockets */
     int receivers[2];
 
-    /* Port on which to listen for announcements. */
-    PORT listen_port;
-
-    /* Shared secret, or passphrase, we use to decrypt a received datagram. */
-    char *secret;
-    size_t secret_length;
-
-    /* Whether to listen for datagrams on IPv4, IPv6, or both.
-     * Valid values are TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH. */
-    int address_families;
-
-    /* If this is zero (the default) then we ignore datagrams which are not
-     * encrypted. */
-    int allow_unencrypted;
-
-    /* tttdlctx_listen() calls listening_cb() when it has set up a socket which
-     * is waiting to receive announcement packets over UDP. */
-    tttdl_listening_cb listening_cb;
-    void *listening_cb_cookie;
-
-    /* tttdlctx_listen() calls announcement_cb() whenever it receives an
-     * announcement datagram, and passes details of where it came from and
-     * whether it was valid. */
-    tttdl_announcement_cb announcement_cb;
-    void *announcement_cb_cookie;
-
-    /* If set, we write to stderr when we reject an announcement datagram. */
-    int verbose;
+    /* Initially 0. Set to 1 when we listen for announcements, so that if we
+     * have cause to re-listen we don't call the callback again. */
+    int listening_cb_called;
 };
 
 /* TTT discovery announce context */
@@ -75,21 +113,11 @@ struct tttdactx {
     /* Ports we're inviting hosts to connect on. */
     PORT invitation_port4, invitation_port6;
 
-    /* TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH. */
-    int address_families;
-
-    /* TTT_ANNOUNCE_BROADCAST, TTT_ANNOUNCE_MULTICAST or TTT_ANNNOUNCE_BOTH. */
-    int address_types;
-
     /* Multicast rendezvous address converted to an addrinfo structure. */
     struct addrinfo *multicast_rendezvous_addrinfo4;
 
     /* IPv6 multicast rendezvous address converted to an addrinfo. */
     struct addrinfo *multicast_rendezvous_addrinfo6;
-
-    /* The shared secret, or passphrase. */
-    char *secret;
-    size_t secret_length;
 
     /* List of network interfaces which have a broadcast address, each of
      * which contains a socket we will bind to that interface's address. */
@@ -100,35 +128,13 @@ struct tttdactx {
     struct ttt_netif *multicast_ifs;
 };
 
-/* Initialise a discover-announce context with the given passphrase. This also
- * initialises a list of sockets.
- *
- * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY or TTT_IP_BOTH.
- * Specifies whether to announce on IPv4 interfaces, IPv6 interfaces, or both.
- *
- * address_types_flags: TTT_ANNOUNCE_MULTICAST_ONLY, TTT_ANNOUNCE_BROADCAST_ONLY
- * or TTT_ANNOUNCE_BOTH. Specifies whether to announce by multicast, broadcast
- * or both.
- *
- * The caller may set options using tttdactx_set_port(),
- * tttdactx_set_multicast_ttl() etc before actually starting the announcement
- * stage using tttdactx_announce().
+/* Initialise a discover-announce context with the passphrase and other
+ * options in opts. This also initialises a list of sockets in dactx.
  *
  * Return 0 on success, or nonzero on error. We might return an error if there
  * are no suitable network interfaces, for example. */
 int
-tttdactx_init(struct tttdactx *ctx, int address_families_flags,
-        int address_types_flags, const char *passphrase, size_t passphrase_length);
-
-/* Set the port number on which to send announcement datagrams.
- * The default is TTT_DEFAULT_DISCOVER_PORT. */
-void
-tttdactx_set_port(struct tttdactx *ctx, PORT port);
-
-/* Set the TTL of multicast datagrams we send. By default this is 1. The
- * ip(7) man page strongly warns against setting this higher than necessary. */
-void
-tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl);
+tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts);
 
 /* Send out an announcement datagram on every suitable network interface.
  * The datagram is encrypted with the passphrase. When decrypted by the
@@ -144,74 +150,19 @@ tttdactx_set_multicast_ttl(struct tttdactx *ctx, int ttl);
  *
  * Return 0 on success or nonzero on failure. */
 int
-tttdactx_announce(struct tttdactx *ctx);
+tttdactx_announce(struct tttdactx *ctx, struct ttt_discover_options *opts);
 
 /* Destroy a previously-initialise TTT discover-announce context and free any
  * resources associated with it. */
 void
 tttdactx_destroy(struct tttdactx *ctx);
 
-/* Initialise a TTT discover-listen context with the given passphrase. This
- * is called by the other endpoint to the one that called tttdactx_init(). It
- * does not actually receive announcement datagrams: you need to call
- * tttdlctx_listen() after setting up any required options. */
+/* Initialise a TTT discover-listen context with the passphrase and options
+ * in opts. This is called by the other endpoint to the one that called
+ * tttdactx_init(). It does not actually receive announcement datagrams: you
+ * need to call tttdlctx_receive(). */
 int
-tttdlctx_init(struct tttdlctx *ctx, const char *passphrase, size_t passphrase_length);
-
-/* Set the port number on which we expect to receive announcement datagrams
- * over UDP. The default is TTT_DEFAULT_DISCOVER_PORT. */
-void
-tttdlctx_set_port(struct tttdlctx *ctx, PORT port);
-
-/* "Listening" callback.
- * Set a callback to be called by tttdlctx_listen() when we start listening
- * for announcement datagrams. This indicates that we've configured all the
- * network interfaces successfully and are now proceeding to the bit where we
- * wait for announcements.
- * See the typedef for tttdl_listening_cb above. */
-void
-tttdlctx_set_listening_cb(struct tttdlctx *ctx, tttdl_listening_cb listening_cb);
-
-/* Set an arbitrary pointer to be passed to the "listening" callback (see
- * above). */
-void
-tttdlctx_set_listening_callback_cookie(struct tttdlctx *ctx, void *cookie);
-
-/* Announcement callback.
- * Set a callback to be called by tttdlctx_listen() when we receive an
- * announcement datagram, valid or invalid.
- * See the typedef for tttdl_announcement_cb above. */
-void
-tttdlctx_set_announcement_callback(struct tttdlctx *ctx, tttdl_announcement_cb announcement_cb);
-
-/* Set an arbitrary pointer to be passed to the "announcement" callback (see
- * above). */
-void
-tttdlctx_set_announcement_callback_cookie(struct tttdlctx *ctx, void *cookie);
-
-/* Set whether we want to be verbose during the discover-listen stage. If we
- * do, we get more diagnostic output written to stderr.
- * value = 0: not verbose.
- * value = 1: verbose.
- */
-void
-tttdlctx_set_verbose(struct tttdlctx *ctx, int value);
-
-/* Specify whether we should listen for announcement datagrams on IPv4,
- * IPv6, or both. address_families must be TTT_IPV4_ONLY, TTT_IPV6_ONLY,
- * or TTT_IPV6_BOTH.
- */
-void
-tttdlctx_set_address_families(struct tttdlctx *ctx, int address_families);
-
-/* Create receiving sockets in ctx to listen for IPv4 and/or IPv6 announcement
- * datagrams, as appropriate.
- *
- * This must be called after setting any options such as address families,
- * announcement types etc, and before calling tttdlctx_receive().
- */
-int
-tttdlctx_receive_enable(struct tttdlctx *ctx);
+tttdlctx_init(struct tttdlctx *ctx, struct ttt_discover_options *opts);
 
 /* Listen for UDP datagrams on the discover port, on all suitable network
  * interfaces.
@@ -237,22 +188,20 @@ tttdlctx_receive_enable(struct tttdlctx *ctx);
  * Return a negative number in the event of an error.
  */
 int
-tttdlctx_receive(struct tttdlctx *ctx,
+tttdlctx_receive(struct tttdlctx *ctx, struct ttt_discover_options *opts,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
         PORT *invitation_port_r);
 
-/* Add this discover-listen context's receiving socket(s) (created by a
- * previous call to tttdlctx_receive_enable()) to the given fd_set
- * using FD_SET().
+/* Add this discover-listen context's receiving socket(s), created upon the
+ * initialisation of the tttdlctx, to the given fd_set using FD_SET().
  *
  * Return the highest-numbered file descriptor added to the set, or -1 if
  * no file descriptors were added. */
 int
 tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set);
 
-/* Test whether any of this discover-listen context's receiving socket(s)
- * (created by a previous call to tttdlctx_receive_enable()) are in the
- * given fd_set.
+/* Test whether any of this discover-listen context's receiving socket(s),
+ * created upon the initialisation of the tttdlctx, are in the given fd_set.
  *
  * If this returns 1, then there is something to receive on at least one of
  * our receiving sockets, and a call to tttdlctx_receive() will not block.
@@ -261,64 +210,106 @@ tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set);
 int
 tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set);
 
-/* Destroy any receiving sockets created by tttdlctx_receive_enable(). This
- * function is automatically called by tttdlctx_destroy().
- */
-void
-tttdlctx_receive_disable(struct tttdlctx *ctx);
-
 /* Destroy a previously-initialised TTT discover-listen context and free any
  * resources associated with it. */
 void
 tttdlctx_destroy(struct tttdlctx *ctx);
 
+
+/* Initialise a TTT discover context, suitable for setting options in and
+ * passing to ttt_discover_and_connect() or ttt_discover_and_accept().
+ * The passphrase and length are mandatory. */
+int
+ttt_discover_options_init(struct ttt_discover_options *ctx, const char *passphrase, int passphrase_length);
+
+/* Set the IPv4 multicast group to send announcements to, or to receive
+ * announcements on. This must be an address in the range
+ * "224.0.0.0" to "239.255.255.255".
+ *
+ * The default is TTT_MULTICAST_RENDEZVOUS_ADDR. */
+int
+ttt_discover_set_multicast_ipv4_address(struct ttt_discover_options *ctx, const char *addr);
+
+/* Set the IPv6 multicast group to send announcements to, or to receive
+ * announcements on. This must be a valid IPv6 multicast address. These
+ * begin with "ff".
+ *
+ * The default is TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. */
+int
+ttt_discover_set_multicast_ipv6_address(struct ttt_discover_options *ctx, const char *addr);
+
+/* Set which address families to use to send or receive announcements or to
+ * accept or make a TCP connection. value must be TTT_IPV4_ONLY, TTT_IPV6_ONLY
+ * or TTT_IP_BOTH.
+ *
+ * The default is TTT_IP_BOTH.
+ */
+void
+ttt_discover_set_address_families(struct ttt_discover_options *ctx, int value);
+
+/* Set which announcement strategies we should use to send announcements for
+ * the discovery stage.
+ * Valid values are:
+ * TTT_ANNOUNCE_BROADCAST_ONLY: announce on broadcast addresses only.
+ * TTT_ANNOUNCE_MULTICAST_ONLY: announce on multicast addresses only.
+ * TTT_ANNOUNCE_BOTH: announce on both broadcast and multicast addresses.
+ *
+ * The default is TTT_ANNOUNCE_BOTH.
+ */
+void
+ttt_discover_set_announcement_types(struct ttt_discover_options *ctx, int value);
+
+/* Set the port on which we send, or expect to receive, announcement datagrams
+ * for the discovery stage. The default is TTT_DEFAULT_DISCOVER_PORT. */
+void
+ttt_discover_set_discover_port(struct ttt_discover_options *ctx, int port);
+
+/* Set verbose to 0 or 1 for frugal or profligate use of ttt_error().
+ * The default is 0. */
+void
+ttt_discover_set_verbose(struct ttt_discover_options *ctx, int verbose);
+
+/* Set the callback to be called when ttt_discover_and_connect() starts
+ * listening for announcement datagrams. If we get this far then the initial
+ * setup up to that point has succeeded. cookie is passed as the cookie
+ * argument to listening_cb() when called.
+ * By default, no callback is called for this event. */
+void
+ttt_discover_set_listening_callback(struct ttt_discover_options *ctx,
+        tttdl_listening_cb listening_cb, void *cookie);
+
+/* Set the callback to be called when ttt_discover_and_connect() receives an
+ * announcement packet. It is called regardless of whether the announcement
+ * packet was deciphered and produced a valid decryption. cookie is passed as
+ * the cookie argument to announcement_cb() when called.
+ * By default, no callback is called for this event. */
+void
+ttt_discover_set_announcement_callback(struct ttt_discover_options *ctx,
+        tttdl_announcement_cb announcement_cb, void *cookie);
+
+/* Set the maximum number of announcements ttt_discover_and_accept() should
+ * send, and the interval in milliseconds between them. The default is
+ * 0 for max_announcements, which means to apply no maximum - keep announcing
+ * until interrupted. The default for announcement_interval_ms is 1000. */
+void
+ttt_discover_set_announcements(struct ttt_discover_options *ctx,
+        int max_announcements, int announcement_interval_ms);
+
+/* Set the TTL or hop limit to be associated with announcement datagrams sent
+ * by ttt_discover_and_accept(). */
+void
+ttt_discover_set_multicast_ttl(struct ttt_discover_options *ctx, int ttl);
+
 /* Convenience function to discover the other host on our network which has
  * our passphrase, and make a TCP connection to them, returning that in
  * *new_sess.
- *
- * multicast_address_ipv4, multicast_address_ipv6: the IPv4 and IPv6
- *   multicast addresses we expect to receive announcements on. If this is NULL
- *   we use the default, TTT_MULTICAST_RENDEZVOUS_ADDR and
- *   TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. The other host must use the same
- *   address.
- *
- * address_families: whether to listen for announcement datagrams on IPv4,
- *   IPv6, or both. Set it to TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
- *
- * discover_port: the port on which we expect to receive announcement
- *   datagrams. If this is <= 0 we use TTT_DEFAULT_DISCOVER_PORT. The other
- *   host must use the same port.
- *
- * passphrase, passphrase_length: the passphrase to use, and its length in
- *   bytes. The other host must use exactly the same passphrase. If it doesn't,
- *   you won't find each other.
- *
- * verbose: 1 to be verbose and write more stuff to stderr, 0 to not do that.
- *
- * listening_cb, listening_callback_cookie: callback to call when we start
- *   listening for announcement packets, and an arbitrary pointer to pass to
- *   the callback. See tttdlctx_set_listening_cb(). These can be set to NULL
- *   if not used.
- *
- * announcement_cb, announcement_callback_cookie: callback to call when we
- *   receive an announcement datagram, valid or not. See
- *   tttdlctx_set_announcement_cb(). These can be set to NULL if not used.
- *
- * new_sess: *new_sess is set to a new ttt_session object. It is the caller's
- * responsibility to destroy this session (ttt_session_destroy()) when it is
- * no longer required.
  *
  * Return 0 on success, which means we received a valid announcement,
  * successfully connected to the port we were invited to, and successfully
  * handshook with the other end and created a ttt_session. Nonzero on failure.
  */
 int
-ttt_discover_and_connect(const char *multicast_address_ipv4,
-        const char *multicast_address_ipv6, int address_families,
-        int discover_port, const char *passphrase, size_t passphrase_length,
-        int verbose,
-        tttdl_listening_cb listening_cb, void *listening_callback_cookie,
-        tttdl_announcement_cb announcement_cb, void *announcement_callback_cookie,
+ttt_discover_and_connect(struct ttt_discover_options *ctx,
         struct ttt_session *new_sess);
 
 /* Convenience function to discover the other host on our network which has
@@ -329,40 +320,6 @@ ttt_discover_and_connect(const char *multicast_address_ipv4,
  * passphrase and encrypting the session), we return the session in *new_sess.
  *
  * This is the "other side" to ttt_discover_and_connect().
- *
- * multicast_address_ipv4, multicast_address_ipv6: the IPv4 and IPv6
- *   multicast addresses to send announcements on. If this is NULL we use the
- *   default, TTT_MULTICAST_RENDEZVOUS_ADDR and
- *   TTT_MULTICAST_RENDEZVOUS_ADDR_IPv6. The other host must use the same
- *   address.
- *
- * address_families: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
- *
- * address_types: TTT_ANNOUNCE_BROADCAST_ONLY, TTT_ANNOUNCE_MULTICAST_ONLY, or
- *   TTT_ANNOUNCE_BOTH.
- *
- * discover_port: the port on which to send announcements. If this is <= 0 we
- *   use TTT_DEFAULT_DISCOVER_PORT. The other host must use the same port.
- *
- * max_announcements: the maximum number of announcements to send on each
- *   suitable network interface. If we send this many announcements and we
- *   still don't get a valid incoming TCP connection, we fail.
- *
- * announcement_interval_ms: the number of milliseconds to wait between
- *   annoucnements, during which we wait for incoming connections on our
- *   listening socket.
- *
- * multicast_ttl: the TTL to set on our multicast announcement datagrams.
- *   Warning: the ip(7) man page strongly warns against setting this to
- *   anything higher than it needs to be. The recommended value is 0, which
- *   leaves it at the default (1 for IPv4, route default for IPv6).
- *
- * passphrase, passphrase_length: the passphrase to use, and its length in
- *   bytes. The other host must use exactly the same passphrase. If it doesn't,
- *   the announcement datagrams we send will be ignored and you won't find
- *   the other host.
- *
- * verbose: 1 to enable more descriptive waffling on stderr. 0 to not.
  *
  * *new_sess: set to a new ttt_session object if we received a connection on
  *   the port we specified in an announcement datagram, and we successfully
@@ -376,11 +333,12 @@ ttt_discover_and_connect(const char *multicast_address_ipv4,
  * successfully handshook with the other end. Return nonzero on failure.
  */
 int
-ttt_discover_and_accept(const char *multicast_address_ipv4,
-        const char *multicast_address_ipv6, int address_families,
-        int address_types, int discover_port, int max_announcements,
-        int announcement_interval_ms, int multicast_ttl,
-        const char *passphrase, size_t passphrase_length, int verbose,
+ttt_discover_and_accept(struct ttt_discover_options *ctx,
         struct ttt_session *new_sess);
+
+/* Free any resources associated with the ttt_discover_options created with
+ * ttt_discover_options_init(). */
+void
+ttt_discover_options_destroy(struct ttt_discover_options *ctx);
 
 #endif

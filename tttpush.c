@@ -26,8 +26,8 @@ enum main_push_longopts {
     PUSH_DISCOVER_PORT,
     PUSH_MULTICAST_ADDRESS,
     PUSH_SEND_FULL_METADATA,
-    PUSH_NO_IPV4,
-    PUSH_NO_IPV6
+    PUSH_IPV4,
+    PUSH_IPV6
 };
 
 static const struct option longopts[] = {
@@ -35,8 +35,8 @@ static const struct option longopts[] = {
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
     { "multicast-address", 1, NULL, PUSH_MULTICAST_ADDRESS },
     { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
-    { "no-ipv4", 0, NULL, PUSH_NO_IPV4 },
-    { "no-ipv6", 0, NULL, PUSH_NO_IPV6 },
+    { "ipv4", 0, NULL, PUSH_IPV4 },
+    { "ipv6", 0, NULL, PUSH_IPV6 },
     { "words", 1, NULL, 'w' },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -52,13 +52,13 @@ print_help(FILE *f) {
 "Usage:\n"
 "    ttt push [options] files...\n"
 "Options:\n"
+"    -4, --ipv4               Use IPv4 and not IPv6\n"
+"    -6, --ipv6               Use IPv6 and not IPv4\n"
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               puller must use the same)\n"
 "    --help                   Show this help\n"
 "    --multicast-address <a>  Specify discovery multicast address (default\n"
 "                               %s, puller must use the same)\n"
-"    --no-ipv4                Do not use IPv4\n"
-"    --no-ipv6                Do not use IPv6\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
 "    --send-full-metadata     Send full metadata to receiver before transfer\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
@@ -120,9 +120,10 @@ main_push(int argc, char **argv) {
     char peer_addr[256] = "";
     char peer_port[20] = "";
     int generated_passphrase = 0;
-    int address_families = TTT_IP_BOTH;
+    int address_families = 0;
+    struct ttt_discover_options opts;
 
-    while ((c = getopt_long(argc, argv, "hvw:", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hvw:46", longopts, NULL)) != -1) {
         switch (c) {
             case PUSH_PASSPHRASE:
                 passphrase = strdup(optarg);
@@ -149,12 +150,14 @@ main_push(int argc, char **argv) {
                     passphrase_word_count = 1;
                 break;
 
-            case PUSH_NO_IPV4:
-                address_families &= ~TTT_IPV4;
+            case '4':
+            case PUSH_IPV4:
+                address_families |= TTT_IPV4;
                 break;
 
-            case PUSH_NO_IPV6:
-                address_families &= ~TTT_IPV6;
+            case '6':
+            case PUSH_IPV6:
+                address_families |= TTT_IPV6;
                 break;
 
             case 'h':
@@ -177,7 +180,7 @@ main_push(int argc, char **argv) {
     }
 
     if (address_families == 0) {
-        ttt_error(1, 0, "--no-ipv4 and --no-ipv6 may not be combined");
+        address_families = TTT_IP_BOTH;
     }
 
     files_to_push = argv + optind;
@@ -203,12 +206,20 @@ main_push(int argc, char **argv) {
         generated_passphrase = 1;
     }
 
+    ttt_discover_options_init(&opts, passphrase, strlen(passphrase));
+    if (multicast_address)
+        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address);
+    ttt_discover_set_address_families(&opts, address_families);
+    ttt_discover_set_discover_port(&opts, discover_port);
+    ttt_discover_set_verbose(&opts, verbose);
+    ttt_discover_set_listening_callback(&opts, listening_callback,
+            generated_passphrase ? passphrase : NULL);
+    ttt_discover_set_announcement_callback(&opts,
+            received_announcement_callback, &verbose);
+
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
-    if (ttt_discover_and_connect(multicast_address, NULL, address_families,
-                discover_port, passphrase, strlen(passphrase), verbose,
-                listening_callback, generated_passphrase ? passphrase : NULL,
-                received_announcement_callback, &verbose, &sess) == 0) {
+    if (ttt_discover_and_connect(&opts, &sess) == 0) {
         sess_valid = 1;
     }
     else {
@@ -236,6 +247,8 @@ main_push(int argc, char **argv) {
         ttt_session_destroy(&sess);
         ttt_file_transfer_destroy(&ctx);
     }
+
+    ttt_discover_options_destroy(&opts);
 
     free(passphrase);
 

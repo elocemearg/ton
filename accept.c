@@ -102,7 +102,7 @@ make_listening_socket(int address_family, const char *listen_addr,
 
     /* Create our listening socket. */
     listener = socket(listen_addrinfo->ai_family, listen_addrinfo->ai_socktype, listen_addrinfo->ai_protocol);
-    
+
     if (listener < 0) {
         ttt_socket_error(0, "tttacctx_init: socket");
         goto fail;
@@ -233,7 +233,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         end.tv_usec -= 1000000;
         end.tv_sec++;
     }
-    
+
     listeners[0] = ctx->listen_socket4;
     listeners[1] = ctx->listen_socket6;
 
@@ -395,7 +395,7 @@ int main(int argc, char **argv) {
      *
      * This connection must send us "hello\n".
      * We then send it "hello\n". This is our plaintext "handshake".
-     * 
+     *
      * Then we print the address and port that connected to us.
      *
      * Every second while waiting for this to happen, time out and print a
