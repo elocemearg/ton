@@ -895,7 +895,7 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     }
 
     /* Return -1 (failure) if every attempt to send failed. */
-    if (num_socket_succeeded == 0) {
+    if (num_sockets_succeeded == 0) {
         ttt_error(0, 0, "failed to send announcement on any socket");
     }
     return num_sockets_succeeded == 0 ? -1 : 0;
@@ -1038,7 +1038,7 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
     /* Initialise a discovery listen context */
     memset(&dlctx, 0, sizeof(dlctx));
     if (tttdlctx_init(&dlctx, opts) != 0) {
-        ttt_error(0, error, "failed to initialise listen context");
+        ttt_error(0, errno, "failed to initialise listen context");
         return -1;
     }
     ctx_valid = 1;
