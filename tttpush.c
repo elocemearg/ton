@@ -29,7 +29,9 @@ enum main_push_longopts {
     PUSH_SEND_FULL_METADATA,
     PUSH_IPV4,
     PUSH_IPV6,
-    PUSH_INCLUDE_GLOBAL
+    PUSH_INCLUDE_GLOBAL,
+    PUSH_PROMPT_PASSPHRASE,
+    PUSH_HIDE_PASSPHRASE,
 };
 
 static const struct option longopts[] = {
@@ -42,6 +44,8 @@ static const struct option longopts[] = {
     { "ipv4", 0, NULL, PUSH_IPV4 },
     { "ipv6", 0, NULL, PUSH_IPV6 },
     { "words", 1, NULL, 'w' },
+    { "prompt-passphrase", 0, NULL, PUSH_PROMPT_PASSPHRASE },
+    { "hide-passphrase", 0, NULL, PUSH_HIDE_PASSPHRASE },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
 
@@ -61,6 +65,7 @@ print_help(FILE *f) {
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               puller must use the same)\n"
 "    --help                   Show this help\n"
+"    --hide-passphrase        Don't show passphrase as you type at the prompt\n"
 "    --include-global         Listen for announcements on global as well as\n"
 "                               private IP addresses\n"
 "    --multicast-address-ipv4 <a>\n"
@@ -70,6 +75,7 @@ print_help(FILE *f) {
 "                             Specify discovery IPv6 multicast address (default\n"
 "                               %s, puller must use the same)\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
+"    --prompt-passphrase      Prompt for passphrase rather than generating it\n"
 "    --send-full-metadata     Send full metadata to receiver before transfer\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
@@ -132,6 +138,8 @@ main_push(int argc, char **argv) {
     int generated_passphrase = 0;
     int address_families = 0;
     int include_global = 0;
+    int prompt_for_passphrase = 0;
+    int hide_passphrase = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "hvw:46", longopts, NULL)) != -1) {
@@ -179,6 +187,14 @@ main_push(int argc, char **argv) {
                 include_global = 1;
                 break;
 
+            case PUSH_PROMPT_PASSPHRASE:
+                prompt_for_passphrase = 1;
+                break;
+
+            case PUSH_HIDE_PASSPHRASE:
+                hide_passphrase = 1;
+                break;
+
             case 'h':
                 print_help(stdout);
                 exit(0);
@@ -216,13 +232,26 @@ main_push(int argc, char **argv) {
         exit(exit_status);
     }
 
-    /* If we haven't been given a passphrase, generate one. */
+    /* If we haven't been given a passphrase, generate or prompt for one. */
     if (passphrase == NULL) {
-        passphrase = ttt_generate_passphrase(passphrase_word_count);
-        if (passphrase == NULL) {
-            ttt_error(1, 0, "failed to generate passphrase");
+        if (prompt_for_passphrase) {
+            passphrase = ttt_prompt_passphrase("Choose a passphrase: ", hide_passphrase);
+            if (hide_passphrase) {
+                char *confirmed;
+                confirmed = ttt_prompt_passphrase("Confirm passphrase: ", hide_passphrase);
+                if (strcmp(passphrase, confirmed)) {
+                    ttt_error(1, 0, "passphrase and confirmation did not match");
+                }
+                free(confirmed);
+            }
         }
-        generated_passphrase = 1;
+        else {
+            passphrase = ttt_generate_passphrase(passphrase_word_count);
+            if (passphrase == NULL) {
+                ttt_error(1, 0, "failed to generate passphrase");
+            }
+            generated_passphrase = 1;
+        }
     }
 
     ttt_discover_options_init(&opts, passphrase, strlen(passphrase));

@@ -24,7 +24,8 @@ enum main_pull_longopts {
     PULL_IPV6,
     PULL_MULTICAST,
     PULL_BROADCAST,
-    PULL_INCLUDE_GLOBAL
+    PULL_INCLUDE_GLOBAL,
+    PULL_HIDE_PASSPHRASE,
 };
 
 static const struct option longopts[] = {
@@ -44,6 +45,7 @@ static const struct option longopts[] = {
     { "multicast", 0, NULL, PULL_MULTICAST },
     { "broadcast", 0, NULL, PULL_BROADCAST },
     { "include-global", 0, NULL, PULL_INCLUDE_GLOBAL },
+    { "hide-passphrase", 0, NULL, PULL_HIDE_PASSPHRASE },
 
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -67,6 +69,7 @@ print_help(FILE *f) {
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               pusher must use the same)\n"
 "    -h, --help               Show this help\n"
+"    --hide-passphrase        Don't show passphrase as you type at the prompt\n"
 "    --include-global         Send announcements from global as well as\n"
 "                               private addresses\n"
 "    --max-announcements <n>  Give up after <n> discovery announcements\n"
@@ -179,6 +182,7 @@ main_pull(int argc, char **argv) {
     int address_families = 0;
     int announce_types = 0;
     int include_global = 0;
+    int hide_passphrase = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "ho:v46", longopts, NULL)) != -1) {
@@ -257,6 +261,10 @@ main_pull(int argc, char **argv) {
                 include_global = 1;
                 break;
 
+            case PULL_HIDE_PASSPHRASE:
+                hide_passphrase = 1;
+                break;
+
             case 'o':
                 output_dir = optarg;
                 break;
@@ -286,7 +294,7 @@ main_pull(int argc, char **argv) {
     if (passphrase == NULL) {
         /* No passphrase supplied, so prompt for one. */
         fprintf(stderr, "Enter the passphrase generated or specified on the pushing side.\n");
-        passphrase = ttt_prompt_passphrase("Passphrase? ");
+        passphrase = ttt_prompt_passphrase("Passphrase? ", hide_passphrase);
         if (passphrase == NULL) {
             exit(1);
         }
@@ -298,7 +306,7 @@ main_pull(int argc, char **argv) {
     if (multicast_address_ipv4)
         ttt_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
     if (multicast_address_ipv6)
-        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv6);
+        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv4);
     ttt_discover_set_address_families(&opts, address_families);
     ttt_discover_set_announcement_types(&opts, announce_types);
     if (discover_port > 0)

@@ -219,7 +219,7 @@ ttt_generate_passphrase(int num_words) {
 }
 
 char *
-ttt_prompt_passphrase(const char *prompt) {
+ttt_prompt_passphrase(const char *prompt, int hide_passphrase) {
     int c;
     int buf_size = 80;
     int buf_pos = 0;
@@ -231,15 +231,17 @@ ttt_prompt_passphrase(const char *prompt) {
     fprintf(stderr, "%s", prompt);
 
 #ifdef UNIX
-    /* Switch off terminal echo */
-    if (tcgetattr(0, &t) < 0) {
-        ttt_error(0, errno, "tcgetattr");
-        goto fail;
-    }
-    t.c_lflag &= ~ECHO;
-    if (tcsetattr(0, TCSANOW, &t) < 0) {
-        ttt_error(0, errno, "tcsetattr");
-        goto fail;
+    if (hide_passphrase) {
+        /* Switch off terminal echo */
+        if (tcgetattr(0, &t) < 0) {
+            ttt_error(0, errno, "tcgetattr");
+            goto fail;
+        }
+        t.c_lflag &= ~ECHO;
+        if (tcsetattr(0, TCSANOW, &t) < 0) {
+            ttt_error(0, errno, "tcsetattr");
+            goto fail;
+        }
     }
 #endif
 
@@ -261,16 +263,18 @@ ttt_prompt_passphrase(const char *prompt) {
 
 end:
 #ifdef UNIX
-    /* Switch terminal echo back on */
-    t.c_lflag |= ECHO;
-    if (tcsetattr(0, TCSANOW, &t) < 0) {
-        ttt_error(0, errno, "tcsetattr");
-        goto fail;
+    if (hide_passphrase) {
+        /* Switch terminal echo back on */
+        t.c_lflag |= ECHO;
+        if (tcsetattr(0, TCSANOW, &t) < 0) {
+            ttt_error(0, errno, "tcsetattr");
+            goto fail;
+        }
+
+        /* Echo the newline */
+        putchar('\n');
     }
 #endif
-
-    /* Echo the newline */
-    putchar('\n');
 
     /* Return the newly allocated line */
     return buf;
