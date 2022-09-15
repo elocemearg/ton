@@ -24,7 +24,8 @@
 enum main_push_longopts {
     PUSH_PASSPHRASE = 256,
     PUSH_DISCOVER_PORT,
-    PUSH_MULTICAST_ADDRESS,
+    PUSH_MULTICAST_ADDRESS_IPV4,
+    PUSH_MULTICAST_ADDRESS_IPV6,
     PUSH_SEND_FULL_METADATA,
     PUSH_IPV4,
     PUSH_IPV6,
@@ -35,7 +36,8 @@ static const struct option longopts[] = {
     { "passphrase", 1, NULL, PUSH_PASSPHRASE },
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
     { "include-global", 0, NULL, PUSH_INCLUDE_GLOBAL },
-    { "multicast-address", 1, NULL, PUSH_MULTICAST_ADDRESS },
+    { "multicast-address-ipv4", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV4 },
+    { "multicast-address-ipv6", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV6 },
     { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
     { "ipv4", 0, NULL, PUSH_IPV4 },
     { "ipv6", 0, NULL, PUSH_IPV6 },
@@ -61,14 +63,18 @@ print_help(FILE *f) {
 "    --help                   Show this help\n"
 "    --include-global         Listen for announcements on global as well as\n"
 "                               private IP addresses\n"
-"    --multicast-address <a>  Specify discovery multicast address (default\n"
+"    --multicast-address-ipv4 <a>\n"
+"                             Specify discovery IPv4 multicast address (default\n"
+"                               %s, puller must use the same)\n"
+"    --multicast-address-ipv6 <a>\n"
+"                             Specify discovery IPv6 multicast address (default\n"
 "                               %s, puller must use the same)\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
 "    --send-full-metadata     Send full metadata to receiver before transfer\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4);
+        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4, TTT_MULTICAST_GROUP_IPV6);
 }
 
 static void
@@ -111,7 +117,7 @@ int
 main_push(int argc, char **argv) {
     int c;
     char *passphrase = NULL;
-    char *multicast_address = NULL;
+    char *multicast_address_ipv4 = NULL, *multicast_address_ipv6 = NULL;
     int discover_port = -1;
     int passphrase_word_count = 4;
     char **files_to_push = NULL;
@@ -141,8 +147,12 @@ main_push(int argc, char **argv) {
                 }
                 break;
 
-            case PUSH_MULTICAST_ADDRESS:
-                multicast_address = optarg;
+            case PUSH_MULTICAST_ADDRESS_IPV4:
+                multicast_address_ipv4 = optarg;
+                break;
+
+            case PUSH_MULTICAST_ADDRESS_IPV6:
+                multicast_address_ipv6 = optarg;
                 break;
 
             case PUSH_SEND_FULL_METADATA:
@@ -216,8 +226,10 @@ main_push(int argc, char **argv) {
     }
 
     ttt_discover_options_init(&opts, passphrase, strlen(passphrase));
-    if (multicast_address)
-        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address);
+    if (multicast_address_ipv4)
+        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
+    if (multicast_address_ipv6)
+        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv6);
     ttt_discover_set_address_families(&opts, address_families);
     ttt_discover_set_discover_port(&opts, discover_port);
     ttt_discover_set_verbose(&opts, verbose);

@@ -16,7 +16,8 @@ enum main_pull_longopts {
     PULL_DISCOVER_PORT,
     PULL_LISTEN_PORT,
     PULL_MULTICAST_TTL,
-    PULL_MULTICAST_ADDRESS,
+    PULL_MULTICAST_ADDRESS_IPV4,
+    PULL_MULTICAST_ADDRESS_IPV6,
     PULL_PASSPHRASE_WORDS,
     PULL_CONFIRM_FILE_SET,
     PULL_IPV4,
@@ -33,7 +34,8 @@ static const struct option longopts[] = {
     { "discover-port", 1, NULL, PULL_DISCOVER_PORT },
     { "listen-port", 1, NULL, PULL_LISTEN_PORT },
     { "multicast-ttl", 1, NULL, PULL_MULTICAST_TTL },
-    { "multicast-address", 1, NULL, PULL_MULTICAST_ADDRESS },
+    { "multicast-address-ipv4", 1, NULL, PULL_MULTICAST_ADDRESS_IPV4 },
+    { "multicast-address-ipv6", 1, NULL, PULL_MULTICAST_ADDRESS_IPV6 },
     { "output-dir", 1, NULL, 'o' },
     { "words", 1, NULL, PULL_PASSPHRASE_WORDS },
     { "confirm", 0, NULL, PULL_CONFIRM_FILE_SET },
@@ -70,8 +72,12 @@ print_help(FILE *f) {
 "    --max-announcements <n>  Give up after <n> discovery announcements\n"
 "                               (default 0, continue indefinitely)\n"
 "    --multicast              Do not announce to multicast addresses\n"
-"    --multicast-address <a>  Announce to multicast address <a> (default\n"
+"    --multicast-address-ipv4 <a>\n"
+"                             Announce to IPv4 multicast address <a> (default\n"
 "                               %s, pusher must use the same)\n"
+"    --multicast-address-ipv6 <a>\n"
+"                             Announce to IPv6 multicast address <a> (default\n"
+"                               %s)\n"
 "    --multicast-ttl <n>      Set multicast TTL to <n> (default 1)\n"
 "    -o <dir>                 Destination directory for received file(s).\n"
 "                               Default is the current directory. The directory\n"
@@ -79,7 +85,7 @@ print_help(FILE *f) {
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4);
+        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4, TTT_MULTICAST_GROUP_IPV6);
 }
 
 static void
@@ -162,7 +168,7 @@ main_pull(int argc, char **argv) {
     int listen_port = -1;
     int multicast_ttl = 0; // use default (1 for IPv4, route default for IPv6)
     char *passphrase = NULL;
-    char *multicast_address = NULL;
+    char *multicast_address_ipv4 = NULL, *multicast_address_ipv6 = NULL;
     struct ttt_session sess;
     int sess_valid = 0;
     int exit_status = 0;
@@ -209,8 +215,12 @@ main_pull(int argc, char **argv) {
                 }
                 break;
 
-            case PULL_MULTICAST_ADDRESS:
-                multicast_address = optarg;
+            case PULL_MULTICAST_ADDRESS_IPV4:
+                multicast_address_ipv4 = optarg;
+                break;
+
+            case PULL_MULTICAST_ADDRESS_IPV6:
+                multicast_address_ipv6 = optarg;
                 break;
 
             case PULL_MULTICAST_TTL:
@@ -285,8 +295,10 @@ main_pull(int argc, char **argv) {
     ttt_discover_options_init(&opts, passphrase, strlen(passphrase));
 
     /* Set up opts with our options */
-    if (multicast_address)
-        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address);
+    if (multicast_address_ipv4)
+        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
+    if (multicast_address_ipv6)
+        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv6);
     ttt_discover_set_address_families(&opts, address_families);
     ttt_discover_set_announcement_types(&opts, announce_types);
     if (discover_port > 0)
