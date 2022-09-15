@@ -733,7 +733,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
              * address, so that if we have multiple addresses we sent an
              * announcement from each address. */
             if (bind(iface->sock, (struct sockaddr *) &iface->if_addr, iface->if_addr_len) < 0) {
-                ttt_socket_error(0, "failed to bind socket");
+                ttt_socket_error(0, "tttdactx_init: failed to bind socket");
                 closesocket(iface->sock);
                 iface->sock = -1;
             }
@@ -895,6 +895,9 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     }
 
     /* Return -1 (failure) if every attempt to send failed. */
+    if (num_socket_succeeded == 0) {
+        ttt_error(0, 0, "failed to send announcement on any socket");
+    }
     return num_sockets_succeeded == 0 ? -1 : 0;
 }
 
@@ -1035,7 +1038,7 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
     /* Initialise a discovery listen context */
     memset(&dlctx, 0, sizeof(dlctx));
     if (tttdlctx_init(&dlctx, opts) != 0) {
-        ttt_error(0, 0, "failed to initialise listen context");
+        ttt_error(0, error, "failed to initialise listen context");
         return -1;
     }
     ctx_valid = 1;
@@ -1163,14 +1166,12 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     memset(&dactx, 0, sizeof(dactx));
     memset(&acctx, 0, sizeof(acctx));
     if (tttdactx_init(&dactx, opts) != 0) {
-        ttt_error(0, 0, "failed to initialise announce context");
         goto fail;
     }
     dactx_valid = 1;
 
     /* Open our listening TCP socket on the invitation port. */
     if (tttacctx_init(&acctx, NULL, NULL, opts->address_families, opts->listen_port, use_tls) < 0) {
-        ttt_error(0, 0, "failed to initialise connection accept context");
         goto fail;
     }
     acctx_valid = 1;
@@ -1220,7 +1221,6 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
              * announcement. */
             rc = tttacctx_accept(&acctx, opts->announcement_interval_ms, new_sess);
             if (rc < 0) {
-                ttt_error(0, 0, "fatal error waiting for incoming connection");
                 goto fail;
             }
             else if (rc == 0) {
@@ -1244,7 +1244,6 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
          * it to connect to us. */
         rc = tttdactx_announce(&dactx, opts);
         if (rc != 0) {
-            ttt_error(0, 0, "discover_announce failed.");
             num_failed_announcements++;
             if (num_failed_announcements > max_failed_announcements) {
                  break;

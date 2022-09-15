@@ -382,6 +382,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
     }
     else {
         /* What? */
+        ttt_error(0, 0, "tttacctx_accept() exited for some reason, but we neither got a valid session nor timed out?");
         return -1;
     }
 }
