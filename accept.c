@@ -96,7 +96,7 @@ make_listening_socket(int address_family, const char *listen_addr,
 
     rc = getaddrinfo(listen_addr, port_str, &hints, &listen_addrinfo);
     if (rc != 0) {
-        ttt_error(0, 0, "tttacctx_init: getaddrinfo: %s", gai_strerror(rc));
+        ttt_error(0, 0, "make_listening_socket: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
@@ -104,14 +104,23 @@ make_listening_socket(int address_family, const char *listen_addr,
     listener = socket(listen_addrinfo->ai_family, listen_addrinfo->ai_socktype, listen_addrinfo->ai_protocol);
 
     if (listener < 0) {
-        ttt_socket_error(0, "tttacctx_init: socket");
+        ttt_socket_error(0, "make_listening_socket: socket");
         goto fail;
     }
 
     rc = setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
     if (rc != 0) {
-        ttt_socket_error(0, "tttacctx_init: setsockopt");
+        ttt_socket_error(0, "make_listening_socket: setsockopt(SO_REUSEADDR)");
         goto fail;
+    }
+
+    if (address_family == AF_INET6) {
+        /* Set IPV6_V6ONLY so we can bind an IPv4 socket to the same port */
+        rc = setsockopt(listener, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &one, sizeof(one));
+        if (rc != 0) {
+            ttt_socket_error(0, "make_listening_socket: setsockopt(IPV6_V6ONLY)");
+            goto fail;
+        }
     }
 
     /* Make the listening socket non-blocking, and bind it to the listen

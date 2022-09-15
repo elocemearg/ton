@@ -27,12 +27,14 @@ enum main_push_longopts {
     PUSH_MULTICAST_ADDRESS,
     PUSH_SEND_FULL_METADATA,
     PUSH_IPV4,
-    PUSH_IPV6
+    PUSH_IPV6,
+    PUSH_INCLUDE_GLOBAL
 };
 
 static const struct option longopts[] = {
     { "passphrase", 1, NULL, PUSH_PASSPHRASE },
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
+    { "include-global", 0, NULL, PUSH_INCLUDE_GLOBAL },
     { "multicast-address", 1, NULL, PUSH_MULTICAST_ADDRESS },
     { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
     { "ipv4", 0, NULL, PUSH_IPV4 },
@@ -57,6 +59,8 @@ print_help(FILE *f) {
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               puller must use the same)\n"
 "    --help                   Show this help\n"
+"    --include-global         Listen for announcements on global as well as\n"
+"                               private IP addresses\n"
 "    --multicast-address <a>  Specify discovery multicast address (default\n"
 "                               %s, puller must use the same)\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
@@ -64,7 +68,7 @@ print_help(FILE *f) {
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_RENDEZVOUS_ADDR);
+        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4);
 }
 
 static void
@@ -121,6 +125,7 @@ main_push(int argc, char **argv) {
     char peer_port[20] = "";
     int generated_passphrase = 0;
     int address_families = 0;
+    int include_global = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "hvw:46", longopts, NULL)) != -1) {
@@ -158,6 +163,10 @@ main_push(int argc, char **argv) {
             case '6':
             case PUSH_IPV6:
                 address_families |= TTT_IPV6;
+                break;
+
+            case PUSH_INCLUDE_GLOBAL:
+                include_global = 1;
                 break;
 
             case 'h':
@@ -216,6 +225,7 @@ main_push(int argc, char **argv) {
             generated_passphrase ? passphrase : NULL);
     ttt_discover_set_announcement_callback(&opts,
             received_announcement_callback, &verbose);
+    ttt_discover_set_include_global_addresses(&opts, include_global);
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */

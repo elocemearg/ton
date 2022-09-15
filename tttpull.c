@@ -14,6 +14,7 @@ enum main_pull_longopts {
     PULL_ANNOUNCEMENT_INTERVAL,
     PULL_PASSPHRASE,
     PULL_DISCOVER_PORT,
+    PULL_LISTEN_PORT,
     PULL_MULTICAST_TTL,
     PULL_MULTICAST_ADDRESS,
     PULL_PASSPHRASE_WORDS,
@@ -21,7 +22,8 @@ enum main_pull_longopts {
     PULL_IPV4,
     PULL_IPV6,
     PULL_MULTICAST,
-    PULL_BROADCAST
+    PULL_BROADCAST,
+    PULL_INCLUDE_GLOBAL
 };
 
 static const struct option longopts[] = {
@@ -29,6 +31,7 @@ static const struct option longopts[] = {
     { "announcement-interval", 1, NULL, PULL_ANNOUNCEMENT_INTERVAL },
     { "passphrase", 1, NULL, PULL_PASSPHRASE },
     { "discover-port", 1, NULL, PULL_DISCOVER_PORT },
+    { "listen-port", 1, NULL, PULL_LISTEN_PORT },
     { "multicast-ttl", 1, NULL, PULL_MULTICAST_TTL },
     { "multicast-address", 1, NULL, PULL_MULTICAST_ADDRESS },
     { "output-dir", 1, NULL, 'o' },
@@ -38,6 +41,7 @@ static const struct option longopts[] = {
     { "ipv6", 0, NULL, PULL_IPV6 },
     { "multicast", 0, NULL, PULL_MULTICAST },
     { "broadcast", 0, NULL, PULL_BROADCAST },
+    { "include-global", 0, NULL, PULL_INCLUDE_GLOBAL },
 
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -61,6 +65,8 @@ print_help(FILE *f) {
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               pusher must use the same)\n"
 "    -h, --help               Show this help\n"
+"    --include-global         Send announcements from global as well as\n"
+"                               private addresses\n"
 "    --max-announcements <n>  Give up after <n> discovery announcements\n"
 "                               (default 0, continue indefinitely)\n"
 "    --multicast              Do not announce to multicast addresses\n"
@@ -73,7 +79,7 @@ print_help(FILE *f) {
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_RENDEZVOUS_ADDR);
+        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4);
 }
 
 static void
@@ -153,6 +159,7 @@ main_pull(int argc, char **argv) {
     int max_announcements = 0;
     int announcement_interval_ms = 1000;
     int discover_port = -1;
+    int listen_port = -1;
     int multicast_ttl = 0; // use default (1 for IPv4, route default for IPv6)
     char *passphrase = NULL;
     char *multicast_address = NULL;
@@ -165,6 +172,7 @@ main_pull(int argc, char **argv) {
     char peer_port[20] = "";
     int address_families = 0;
     int announce_types = 0;
+    int include_global = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "ho:v46", longopts, NULL)) != -1) {
@@ -191,6 +199,13 @@ main_pull(int argc, char **argv) {
                 discover_port = atoi(optarg);
                 if (discover_port == 0 || discover_port > 65535) {
                     ttt_error(1, 0, "--discover-port: port number must be between 1 and 65535");
+                }
+                break;
+
+            case PULL_LISTEN_PORT:
+                listen_port = atoi(optarg);
+                if (listen_port < 0 || listen_port > 65535) {
+                    ttt_error(1, 0, "--listen-port: port number must be between 1 and 65535, or 0 for any port");
                 }
                 break;
 
@@ -226,6 +241,10 @@ main_pull(int argc, char **argv) {
 
             case PULL_MULTICAST:
                 announce_types |= TTT_ANNOUNCE_MULTICAST;
+                break;
+
+            case PULL_INCLUDE_GLOBAL:
+                include_global = 1;
                 break;
 
             case 'o':
@@ -270,10 +289,15 @@ main_pull(int argc, char **argv) {
         ttt_discover_set_multicast_ipv4_address(&opts, multicast_address);
     ttt_discover_set_address_families(&opts, address_families);
     ttt_discover_set_announcement_types(&opts, announce_types);
-    ttt_discover_set_discover_port(&opts, discover_port);
+    if (discover_port > 0)
+        ttt_discover_set_discover_port(&opts, discover_port);
+    if (listen_port >= 0)
+        ttt_discover_set_listen_port(&opts, listen_port);
     ttt_discover_set_announcements(&opts, max_announcements, announcement_interval_ms);
     ttt_discover_set_multicast_ttl(&opts, multicast_ttl);
     ttt_discover_set_verbose(&opts, verbose);
+    ttt_discover_set_include_global_addresses(&opts, include_global);
+    ttt_discover_set_listen_port(&opts, listen_port);
 
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */

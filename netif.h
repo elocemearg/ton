@@ -66,7 +66,7 @@ struct ttt_netif {
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
 struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags);
+ttt_get_multicast_ifs(int address_families_flags, int include_global);
 
 /* Get a list of all suitable network interfaces which have a broadcast
  * address we can use. We return a pointer to a linked list of struct ttt_netif.
@@ -77,7 +77,7 @@ ttt_get_multicast_ifs(int address_families_flags);
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
 struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags);
+ttt_get_broadcast_ifs(int address_families_flags, int include_global);
 
 /* Free a list of interfaces previously returned by ttt_get_multicast_ifs()
  * or ttt_get_broadcast_ifs(). num_addrs must be the *num_ifaces value
@@ -92,17 +92,19 @@ ttt_netif_list_free(struct ttt_netif *list, int close_sockets);
 /* Find all the multicast-enabled interfaces we can and enable them to receive
  * multicast datagrams on this socket to the given address, which must be in
  * the multicast range. If multicast_addr_str is NULL, use the default
- * TTT_MULTICAST_RENDEZVOUS_ADDR.
+ * TTT_MULTICAST_GROUP_IPV4 or TTT_MULTICAST_GROUP_IPV6 as appropriate. If
+ * include_global is nonzero, do this on all interfaces, even those which only
+ * have globally-routable IP addresses.
  *
  * Return the number of interfaces on which we successfully subscribed to this
  * address. */
 int
-multicast_interfaces_subscribe(int sock, const char *multicast_addr_str);
+multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, int include_global);
 
 /* Undo multicast_interfaces_subscribe(): make it so that the socket no longer
  * receives datagrams to the given multicast address on all multicast-enabled
  * interfaces. If multicast_addr_str is NULL, use the default
- * TTT_MULTICAST_RENDEZVOUS_ADDR.
+ * TTT_MULTICAST_GROUP_IPV4 or TTT_MULTICAST_GROUP_IPV6.
  *
  * Return the number of interfaces on which we successfully unsubscribed from
  * datagrams to this address.
