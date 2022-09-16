@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <getopt.h>
+#include <stdbool.h>
 
 #include "encryption.h"
 #include "utils.h"
@@ -173,16 +174,16 @@ main_pull(int argc, char **argv) {
     char *passphrase = NULL;
     char *multicast_address_ipv4 = NULL, *multicast_address_ipv6 = NULL;
     struct ttt_session sess;
-    int sess_valid = 0;
+    bool sess_valid = 0;
     int exit_status = 0;
     char *output_dir = ".";
-    int confirm_file_set = 0;
+    bool confirm_file_set = 0;
     char peer_addr[256] = "";
     char peer_port[20] = "";
     int address_families = 0;
     int announce_types = 0;
-    int include_global = 0;
-    int hide_passphrase = 0;
+    bool include_global = 0;
+    bool hide_passphrase = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "ho:v46", longopts, NULL)) != -1) {
@@ -236,7 +237,7 @@ main_pull(int argc, char **argv) {
                 break;
 
             case PULL_CONFIRM_FILE_SET:
-                confirm_file_set = 1;
+                confirm_file_set = true;
                 break;
 
             case '4':
@@ -258,11 +259,11 @@ main_pull(int argc, char **argv) {
                 break;
 
             case PULL_INCLUDE_GLOBAL:
-                include_global = 1;
+                include_global = true;
                 break;
 
             case PULL_HIDE_PASSPHRASE:
-                hide_passphrase = 1;
+                hide_passphrase = true;
                 break;
 
             case 'o':
@@ -275,7 +276,7 @@ main_pull(int argc, char **argv) {
                 break;
 
             case 'v':
-                verbose = 1;
+                verbose++;
                 break;
 
             default:
@@ -322,7 +323,7 @@ main_pull(int argc, char **argv) {
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */
     if (ttt_discover_and_accept(&opts, &sess) == 0) {
-        sess_valid = 1;
+        sess_valid = true;
     }
     else {
         ttt_error(0, 0, "failed to establish incoming connection");

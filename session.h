@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #endif
 
+#include <stdbool.h>
 #include <sys/types.h>
 #include <openssl/ssl.h>
 
@@ -38,7 +39,7 @@ struct ttt_session {
 
     /* True if this socket was born by accepting a connection from a listening
      * socket, false if it connected out to something. */
-    int is_server;
+    bool is_server;
 
     /* The address of the peer on the other end of the socket. */
     struct sockaddr_storage addr;
@@ -47,7 +48,7 @@ struct ttt_session {
     /* Not here yet: SSL structures for encrypted connections. */
 
     /* Used only during connection setup */
-    int want_read, want_write, failed;
+    bool want_read, want_write, failed;
     struct ttt_session *next;
 };
 
@@ -56,11 +57,11 @@ ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_
 
 int
 ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
-        socklen_t addr_len, int use_tls, int is_server);
+        socklen_t addr_len, bool use_tls, bool is_server);
 
 int
 ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
-        socklen_t addr_len, int use_tls);
+        socklen_t addr_len, bool use_tls);
 
 int
 ttt_session_handshake(struct ttt_session *s);

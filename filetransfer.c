@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include <assert.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -55,13 +56,13 @@ static void
 join_paths(const char *path1, const char *path2, char *dest) {
     /* Decide whether we need to put a directory separator between these */
     size_t path1_len = strlen(path1);
-    int add_sep;
+    bool add_sep;
 
     if (path1[0]) {
         add_sep = (path1[path1_len - 1] != DIR_SEP);
     }
     else {
-        add_sep = 1;
+        add_sep = true;
     }
 
     /* Translate / back into the local directory separator */
@@ -895,7 +896,7 @@ int
 ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         long file_number, long file_count, long long *bytes_sent_so_far,
         long long *total_size, long num_files_skipped, struct ttt_file *f,
-        int *file_failed) {
+        bool *file_failed) {
     struct ttt_msg msg;
     FILE *stream = NULL;
     size_t bytes_read = 0;
@@ -924,7 +925,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             ttt_error(0, err, "%s", f->local_path);
             if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
                 goto fail;
-            *file_failed = 1;
+            *file_failed = true;
             return 0;
         }
 
@@ -955,7 +956,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                      * file failed to send. The session continues. */
                     int err = errno;
                     ttt_error(0, err, "%s", f->local_path);
-                    *file_failed = 1;
+                    *file_failed = true;
                     if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
                         goto fail;
                     }
@@ -1021,7 +1022,7 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
         struct ttt_session *sess, long long *total_files_out,
         long long *num_file_failures_out) {
     struct ttt_file_list file_list;
-    int walk_failures = 0;
+    bool walk_failures = false;
     int return_value = 0;
     long num_file_failures = 0;
     long long progress_bytes_sent_so_far = 0;
@@ -1043,7 +1044,7 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             goto fail;
         }
         else if (rc > 0) {
-            walk_failures = 1;
+            walk_failures = true;
         }
     }
 
@@ -1092,7 +1093,7 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
         if (ttt_send_message(sess, TTT_MSG_FILE_SET_START) < 0)
             goto fail;
         for (struct ttt_file *f = file_list.start; f; f = f->next) {
-            int file_failed = 0;
+            bool file_failed = false;
             if (access(f->local_path, F_OK) != 0 && errno == ENOENT) {
                 /* File existed when we walked the directories, but it's gone
                  * now. Report this as a non-fatal error. */
@@ -1175,7 +1176,7 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
     struct ttt_msg msg;
     struct ttt_decoded_msg decoded;
     long long file_count = 0, total_size = 0;
-    int received_summary = 0;
+    bool received_summary = false;
 
     do {
         if (ttt_get_next_message(sess, &msg, &decoded) != 0) {
@@ -1185,7 +1186,7 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
             /* Summary only */
             file_count = decoded.u.metadata_summary.file_count;
             total_size = decoded.u.metadata_summary.total_size;
-            received_summary = 1;
+            received_summary = true;
         }
         else if (decoded.tag == TTT_MSG_FILE_METADATA) {
             /* Full list of files */
@@ -1231,7 +1232,7 @@ ttt_update_progress(const char *current_filename,
         long long total_bytes_received, long long total_size) {
     const char *display_filename = NULL;
     const int filename_limit = 44;
-    int filename_trimmed = 0;
+    bool filename_trimmed = false;
     char bytes_received_str[10];
     char total_size_str[10];
 
@@ -1240,7 +1241,7 @@ ttt_update_progress(const char *current_filename,
         size_t len = strlen(current_filename);
         if (len > filename_limit) {
             display_filename = current_filename + len - filename_limit + 3;
-            filename_trimmed = 1;
+            filename_trimmed = true;
         }
         else {
             display_filename = current_filename;
@@ -1318,7 +1319,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
     struct ttt_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
     char *local_filename = NULL; /* name of current or last file received */
-    int in_file_transfer = 0; /* are we between FILE_METADATA and DATA_END */
+    bool in_file_transfer = false; /* are we between FILE_METADATA and DATA_END */
     char *ttt_filename = NULL; /* filename according to FILE_METADATA */
     time_t current_file_mtime = 0;
     long long current_file_position = 0;
@@ -1361,7 +1362,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             /* We are now in a file transfer, which means we can only receive
              * TTT_MSG_FILE_DATA_CHUNK, TTT_MSG_FILE_DATA_END or
              * TTT_MSG_FATAL_ERROR until the transfer is finished. */
-            in_file_transfer = 1;
+            in_file_transfer = true;
 
             /* Replace ttt_filename and local_filename with the details of the
              * new file - this is now our current file. */
@@ -1388,7 +1389,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     /* We failed to create the file because one or more of its
                      * parent directories don't exist. Try to create the
                      * directory structure prefixing local_filename... */
-                    if (ttt_mkdir_parents(local_filename, 0777, 1, DIR_SEP) < 0) {
+                    if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
                         int err = errno;
                         ttt_error(0, err, "failed to create directory for %s", local_filename);
                         ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for %s: %s", local_filename, strerror(err));
@@ -1410,7 +1411,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Create a FIFO, creating its containing directories if necessary. */
                 if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
                     if (errno == ENOENT) {
-                        if (ttt_mkdir_parents(local_filename, 0777, 1, DIR_SEP) < 0) {
+                        if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
                             int err = errno;
                             ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
                             ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
@@ -1431,7 +1432,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * When we get the TTT_MSG_FILE_DATA_END message, we'll set
                  * its timestamp and permissions. */
                 if (access(local_filename, F_OK) != 0) {
-                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, 0, DIR_SEP) < 0) {
+                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, false, DIR_SEP) < 0) {
                         ttt_error(0, errno, "failed to create directory %s", local_filename);
                     }
                 }
@@ -1533,7 +1534,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
 
             /* We're no longer inside a file transfer, so the next message
              * must be TTT_MSG_FILE_METADATA or TTT_MSG_FILE_SET_END */
-            in_file_transfer = 0;
+            in_file_transfer = false;
         }
         else if (decoded.tag == TTT_MSG_FATAL_ERROR) {
             ttt_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
@@ -1618,7 +1619,7 @@ ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
     int rc;
     long long file_count = -1, total_size = -1;
     long long sender_failed_file_count = 0;
-    int file_set_rejected = 0;
+    bool file_set_rejected = false;
 
     ttt_file_list_init(&list);
 
@@ -1661,7 +1662,7 @@ ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
                 else {
                     /* User rejected the files. Send an error reply and
                      * make this a fatal error. */
-                    file_set_rejected = 1;
+                    file_set_rejected = true;
                     if (ttt_reply_error(sess, TTT_ERR_FILE_SET_REJECTED, "remote user rejected file set") < 0)
                         goto fail;
                 }
@@ -1727,7 +1728,7 @@ ttt_file_transfer_session_end(struct ttt_session *sess) {
  * ttt_file_transfer_init_receiver() to initialise things not specific to
  * either role. */
 static void
-ttt_file_transfer_init(struct ttt_file_transfer *ctx, int start_as_sender) {
+ttt_file_transfer_init(struct ttt_file_transfer *ctx, bool start_as_sender) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->start_as_sender = start_as_sender;
 
@@ -1743,7 +1744,7 @@ ttt_file_transfer_init(struct ttt_file_transfer *ctx, int start_as_sender) {
 /* Initialise a struct ttt_file_transfer where we want to be the sender first. */
 int
 ttt_file_transfer_init_sender(struct ttt_file_transfer *ctx, const char **source_paths, int num_source_paths) {
-    ttt_file_transfer_init(ctx, 1);
+    ttt_file_transfer_init(ctx, true);
 
     /* Copy each string from source_paths to ctx->source_paths */
     if (num_source_paths > 0) {
@@ -1774,7 +1775,7 @@ fail:
 /* Initialise a struct ttt_file_transfer where we want to be the receiver first. */
 int
 ttt_file_transfer_init_receiver(struct ttt_file_transfer *ctx, const char *output_dir) {
-    ttt_file_transfer_init(ctx, 0);
+    ttt_file_transfer_init(ctx, false);
 
     ctx->output_dir = strdup(output_dir);
     if (ctx->output_dir == NULL)
@@ -1798,7 +1799,7 @@ ttt_file_transfer_set_request_to_send_callback(struct ttt_file_transfer *ctx, tt
 }
 
 void
-ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, int value) {
+ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value) {
     ctx->send_full_metadata = value;
 }
 
@@ -1809,12 +1810,12 @@ ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_pr
 
 int
 ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *sess) {
-    int finished = 0;
-    int is_sender = ctx->start_as_sender;
-    int have_been_sender = 0;
-    int have_been_receiver = 0;
+    bool finished = false;
+    bool is_sender = ctx->start_as_sender;
+    bool have_been_sender = false;
+    bool have_been_receiver = false;
+    bool failed = false;
     int rc;
-    int failed = 0;
 
     while (!finished) {
         long long total_files_to_send = 0, num_files_failed = 0;
@@ -1827,31 +1828,31 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
             else {
                 rc = ttt_file_transfer_session_sender(ctx, sess,
                         &total_files_to_send, &num_files_failed);
-                have_been_sender = 1;
+                have_been_sender = true;
             }
         }
         else {
             rc = ttt_file_transfer_session_receiver(ctx, sess,
                     &total_files_to_send, &num_files_failed);
-            have_been_receiver = 1;
+            have_been_receiver = true;
         }
         if (rc == 0 && num_files_failed > 0) {
             ttt_error(0, 0, "warning: %lld of %lld files were not sent%s",
                     num_files_failed, total_files_to_send,
                     is_sender ? " to receiver" : " to us");
-            failed = 1;
+            failed = true;
         }
 
         if (rc < 0) {
             /* Fatal error: abort the session. */
-            finished = 1;
-            failed = 1;
+            finished = true;
+            failed = true;
         }
         else if (rc > 0) {
             /* Send function shouldn't return this! */
             assert(!is_sender);
             /* We're the receiver and the sender has asked to switch roles. */
-            is_sender = 1;
+            is_sender = true;
         }
         else {
             /* rc == 0 */
@@ -1862,22 +1863,22 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
                  * then end the session here. Otherwise, switch roles. */
                 if (ctx->output_dir == NULL || have_been_receiver) {
                     ttt_file_transfer_session_end(sess);
-                    finished = 1;
+                    finished = true;
                 }
                 else {
                     if (ttt_file_transfer_session_switch_roles(sess) < 0) {
-                        finished = 1;
-                        failed = 1;
+                        finished = true;
+                        failed = true;
                     }
                     else {
-                        is_sender = 0;
+                        is_sender = false;
                     }
                 }
             }
             else {
                 /* We're the receiver, and the sender told us to end the
                  * session. */
-                finished = 1;
+                finished = true;
             }
         }
     }
@@ -1885,7 +1886,7 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
     /* Did we want to push files but didn't get an opportunity to be sender? */
     if (!failed && ctx->num_source_paths > 0 && !have_been_sender) {
         ttt_error(0, 0, "couldn't push: remote host did not accept any files");
-        failed = 1;
+        failed = true;
     }
 
     if (failed)

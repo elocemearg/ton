@@ -59,7 +59,7 @@ struct ttt_file_transfer {
      * transfer session (see protocol.c and protocol.h). If zero, this side
      * initially has the "receiver" role. The other endpoint had better have
      * the opposite role to us or things won't go well. */
-    int start_as_sender;
+    bool start_as_sender;
 
     /* Destination directory for any files we receive. If start_as_sender is 1,
      * then if this is NULL we won't ask to switch roles after we've finished
@@ -131,7 +131,7 @@ struct ttt_file_transfer {
      * TTT_MSG_FILE_METADATA message per file we intend to send.
      * If 0, that message sequence will contain only a
      * TTT_MSG_FILE_METADATA_SUMMARY message. */
-    int send_full_metadata;
+    bool send_full_metadata;
 
     /* Opaque pointer set by ttt_file_transfer_set_callback_cookie() and passed
      * to the callback functions. */
@@ -175,7 +175,7 @@ ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_pr
  * send (value == 1) or just a summary containing the count and total size of
  * the files (value == 0). */
 void
-ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, int value);
+ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value);
 
 /* Starts a file transfer session set up with a previous call to
  * ttt_file_transfer_init_sender() or ttt_file_transfer_init_receiver(), using

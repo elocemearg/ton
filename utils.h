@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #endif
 
+#include <stdbool.h>
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -89,7 +90,7 @@ ttt_vfalloc(const char *fmt, va_list ap);
  * Returns 0 on success, nonzero on error.
  */
 int
-ttt_mkdir_parents(const char *path, int mode, int parents_only, char dir_sep);
+ttt_mkdir_parents(const char *path, int mode, bool parents_only, char dir_sep);
 
 /* Convert a size, in bytes, to a human-readable string with an appropriately
  * sized suffix, such as "4.32MB" or "636KB". dest must point to a buffer with

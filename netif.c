@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include "netif.h"
 #include "utils.h"
@@ -43,7 +44,7 @@ ttt_netif_new(void) {
 }
 
 void
-ttt_netif_list_free(struct ttt_netif *list, int close_sockets) {
+ttt_netif_list_free(struct ttt_netif *list, bool close_sockets) {
     struct ttt_netif *cur, *next;
     for (cur = list; cur != NULL; cur = next) {
         next = cur->next;
@@ -139,7 +140,7 @@ netif_remove_duplicates(struct ttt_netif **first, struct ttt_netif **last) {
              * from the list */
             prev->next = next;
             cur->next = NULL;
-            ttt_netif_list_free(cur, 1);
+            ttt_netif_list_free(cur, true);
         }
         else {
             prev = cur;
@@ -150,41 +151,36 @@ netif_remove_duplicates(struct ttt_netif **first, struct ttt_netif **last) {
 
 static const unsigned char ipv6_localhost[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
 
-static int
+static bool
 is_address_private(struct sockaddr *addr) {
     if (addr->sa_family == AF_INET) {
         struct sockaddr_in *addr4 = (struct sockaddr_in *) addr;
         uint32_t ip = ntohl(addr4->sin_addr.s_addr);
-        if ((ip & 0xff000000) == 0x0a000000 || /* 10.x.x.x */
+        return ((ip & 0xff000000) == 0x0a000000 || /* 10.x.x.x */
                 (ip & 0xfff00000) == 0xac100000 || /* 172.16.x.x-172.31.x.x */
                 (ip & 0xffff0000) == 0xc0a80000 || /* 192.168.x.x */
                 (ip & 0xffff0000) == 0xa9fe0000 || /* linklocal 169.254.x.x */
-                (ip & 0xff000000) == 0x7f000000) { /* localhost 127.x.x.x */
-            return 1;
-        }
-        else {
-            return 0;
-        }
+                (ip & 0xff000000) == 0x7f000000); /* localhost 127.x.x.x */
     }
     else if (addr->sa_family == AF_INET6) {
         struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) addr;
         unsigned char top_octet = addr6->sin6_addr.s6_addr[0];
         if (top_octet == 0xfc || top_octet == 0xfd ||
                 (top_octet == 0xfe && (addr6->sin6_addr.s6_addr[1] & 0xc0) == 0x80))
-            return 1;
+            return true;
         else if (memcmp(&addr6->sin6_addr.s6_addr, ipv6_localhost, 16) == 0)
-            return 1;
+            return true;
         else
-            return 0;
+            return false;
     }
     else {
-        return 0;
+        return false;
     }
 }
 
 #ifdef UNIX
 static struct ttt_netif *
-get_if_addrs(int address_families_flags, unsigned int required_iff_flags, int include_global) {
+get_if_addrs(int address_families_flags, unsigned int required_iff_flags, bool include_global) {
     struct ifaddrs *ifs = NULL;
     int rc = 0;
     struct ttt_netif *first = NULL;
@@ -246,7 +242,7 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, int in
                 socklen = (iface->ifa_broadaddr->sa_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
                 memcpy(&netif->bc_addr, iface->ifa_broadaddr, socklen);
                 netif->bc_addr_len = socklen;
-                netif->bc_valid = 1;
+                netif->bc_valid = true;
             }
             else if (netif->family == AF_INET6 && ipv6_bcast != NULL) {
                 /* If this is an IPv6 address, iface->ifa_broadaddr won't be
@@ -254,12 +250,12 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, int in
                  * local network" address ff02::1 */
                 memcpy(&netif->bc_addr, ipv6_bcast->ai_addr, ipv6_bcast->ai_addrlen);
                 netif->bc_addr_len = ipv6_bcast->ai_addrlen;
-                netif->bc_valid = 1;
+                netif->bc_valid = true;
             }
             else {
                 /* No broadcast address for this interface. */
                 netif->bc_addr_len = 0;
-                netif->bc_valid = 0;
+                netif->bc_valid = false;
             }
 
             strncpy(ifreq.ifr_name, iface->ifa_name, IFNAMSIZ);
@@ -268,7 +264,7 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, int in
             rc = ioctl(sock, SIOCGIFINDEX, &ifreq);
             if (rc != 0) {
                 ttt_error(0, errno, "ioctl SIOCGIFINDEX %s", iface->ifa_name);
-                ttt_netif_list_free(netif, 0);
+                ttt_netif_list_free(netif, false);
             }
             else {
                 netif->if_index_ipv4 = ifreq.ifr_ifindex;
@@ -301,19 +297,19 @@ end:
     return first;
 
 fail:
-    ttt_netif_list_free(first, 0);
+    ttt_netif_list_free(first, false);
     first = NULL;
     last = NULL;
     goto end;
 }
 
 struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, int include_global) {
+ttt_get_multicast_ifs(int address_families_flags, bool include_global) {
     return get_if_addrs(address_families_flags, IFF_MULTICAST | IFF_UP, include_global);
 }
 
 struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, int include_global) {
+ttt_get_broadcast_ifs(int address_families_flags, bool include_global) {
     /* IPv6 disabled for now until we can listen on both IPv4 and IPv6 */
     return get_if_addrs(address_families_flags, IFF_BROADCAST | IFF_UP, include_global);
 }
@@ -322,7 +318,7 @@ ttt_get_broadcast_ifs(int address_families_flags, int include_global) {
 #ifdef WINDOWS
 
 static int
-is_useful_interface(IP_ADAPTER_ADDRESSES *addr, int multicast_only) {
+is_useful_interface(IP_ADAPTER_ADDRESSES *addr, bool multicast_only) {
     if ((addr->Flags & IP_ADAPTER_RECEIVE_ONLY) != 0)
         return 0;
     if (multicast_only && (addr->Flags & IP_ADAPTER_NO_MULTICAST) != 0)
@@ -333,7 +329,7 @@ is_useful_interface(IP_ADAPTER_ADDRESSES *addr, int multicast_only) {
 }
 
 static struct ttt_netif *
-get_if_addrs(int address_families_flags, int multicast_only, int include_global) {
+get_if_addrs(int address_families_flags, bool multicast_only, bool include_global) {
     IP_ADAPTER_ADDRESSES *addrs = NULL;
     ULONG addrs_size;
     ULONG ret;
@@ -402,7 +398,7 @@ get_if_addrs(int address_families_flags, int multicast_only, int include_global)
                 netif->if_addr_len = ua->Address.iSockaddrLength;
                 memcpy(&netif->if_addr, ua->Address.lpSockaddr, netif->if_addr_len);
 
-                netif->bc_valid = 0;
+                netif->bc_valid = false;
                 netif->bc_addr_len = 0;
                 netif->if_index_ipv4 = addr->IfIndex;
                 netif->if_index_ipv6 = addr->Ipv6IfIndex;
@@ -430,12 +426,12 @@ get_if_addrs(int address_families_flags, int multicast_only, int include_global)
 }
 
 struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, int include_global) {
-    return get_if_addrs(address_families_flags, 1, include_global);
+ttt_get_multicast_ifs(int address_families_flags, bool include_global) {
+    return get_if_addrs(address_families_flags, true, include_global);
 }
 
 struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, int include_global) {
+ttt_get_broadcast_ifs(int address_families_flags, bool include_global) {
     /* Only using multicast on Windows currently */
     return NULL;
 }
@@ -448,7 +444,7 @@ static struct ttt_netif *multicast_ifs = NULL;
 /* Subscribe or unsubscribe all multicast-enabled interfaces to/from
  * multicast_addr_str on the given socket. */
 static int
-multicast_interfaces_change_membership(int sock, const char *multicast_addr_str, int subscribe, int include_global) {
+multicast_interfaces_change_membership(int sock, const char *multicast_addr_str, bool subscribe, bool include_global) {
     struct addrinfo hints;
     struct addrinfo *multicast_addr = NULL;
     int num_multicast_succeeded = 0;
@@ -523,11 +519,11 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
 }
 
 int
-multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, int include_global) {
-    return multicast_interfaces_change_membership(sock, multicast_addr_str, 1, include_global);
+multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, bool include_global) {
+    return multicast_interfaces_change_membership(sock, multicast_addr_str, true, include_global);
 }
 
 int
 multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str) {
-    return multicast_interfaces_change_membership(sock, multicast_addr_str, 0, 1);
+    return multicast_interfaces_change_membership(sock, multicast_addr_str, false, true);
 }

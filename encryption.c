@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <openssl/evp.h>
 #include <openssl/aes.h>
 #include <openssl/rand.h>
@@ -11,6 +12,7 @@
 #include <termios.h>
 #endif
 
+#include "encryption.h"
 #include "wordlist.h"
 #include "utils.h"
 
@@ -94,8 +96,8 @@ fail:
 }
 
 int
-ttt_set_random_bytes(unsigned char *dest, size_t length) {
-    if (RAND_bytes(dest, length) != 1)
+ttt_set_random_bytes(char *dest, size_t length) {
+    if (RAND_bytes((unsigned char *) dest, length) != 1)
         return -1;
     else
         return 0;
@@ -125,7 +127,7 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
         goto fail;
     }
 
-    if (ttt_set_random_bytes(salt, sizeof(salt)) || ttt_set_random_bytes(iv, sizeof(iv))) {
+    if (ttt_set_random_bytes((char *) salt, sizeof(salt)) || ttt_set_random_bytes((char *) iv, sizeof(iv))) {
         ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: RAND_bytes() failed");
         goto fail;
     }
@@ -219,7 +221,7 @@ ttt_generate_passphrase(int num_words) {
 }
 
 char *
-ttt_prompt_passphrase(const char *prompt, int hide_passphrase) {
+ttt_prompt_passphrase(const char *prompt, bool hide_passphrase) {
     int c;
     int buf_size = 80;
     int buf_pos = 0;

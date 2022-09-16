@@ -1,6 +1,8 @@
 #ifndef _TTTCRYPT_H
 #define _TTTCRYPT_H
 
+#include <stdbool.h>
+
 int
 ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
         size_t dest_max, const char *secret, size_t secret_len);
@@ -19,11 +21,11 @@ ttt_secure_randint(int max);
 
 int
 ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
-        unsigned char *salt, size_t salt_len, unsigned char *key_dest,
+        const unsigned char *salt, size_t salt_len, unsigned char *key_dest,
         size_t key_dest_size);
 
 char *
-ttt_prompt_passphrase(const char *prompt, int hide_passphrase);
+ttt_prompt_passphrase(const char *prompt, bool hide_passphrase);
 
 char *
 ttt_generate_passphrase(int num_words);

@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -129,19 +130,19 @@ make_listening_socket(int address_family, const char *listen_addr,
 
     rc = bind(listener, listen_addrinfo->ai_addr, listen_addrinfo->ai_addrlen);
     if (rc != 0) {
-        ttt_socket_error(0, "tttacctx_init: bind");
+        ttt_socket_error(0, "make_listening_socket: bind");
         goto fail;
     }
 
     rc = listen(listener, 10);
     if (rc != 0) {
-        ttt_socket_error(0, "tttacctx_init: listen");
+        ttt_socket_error(0, "make_listening_socket: listen");
         goto fail;
     }
 
     rc = getsockname(listener, sockaddr, sockaddr_len);
     if (rc != 0) {
-        ttt_socket_error(0, "tttacctx_init: getsockname");
+        ttt_socket_error(0, "make_listening_socket: getsockname");
         goto fail;
     }
 
@@ -160,7 +161,7 @@ fail:
 int
 tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
         const char *listen_addr6, int address_families,
-        unsigned short listen_port, int use_tls) {
+        unsigned short listen_port, bool use_tls) {
     struct sockaddr_storage addr;
     socklen_t addr_len;
 
@@ -230,7 +231,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
     struct timeval start;
     struct timeval end;
     struct ttt_session *chosen_session = NULL;
-    int timed_out = 0;
+    bool timed_out = false;
     int listeners[2];
 
     /* Set start to the time we're called, and end to the time which if
@@ -287,7 +288,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         rc = select(maxfd + 1, &readsockets, &writesockets, NULL, timeout_ms < 0 ? NULL : &timeout);
         if (rc == 0) {
             /* Timeout */
-            timed_out = 1;
+            timed_out = true;
         }
         else if (rc < 0) {
             /* Failure */
@@ -397,7 +398,7 @@ int main(int argc, char **argv) {
     int rc;
 
     /* Listen on port 12345 */
-    if (tttacctx_init(&ctx, NULL, NULL, TTT_IP_BOTH, 12345, 0)) {
+    if (tttacctx_init(&ctx, NULL, NULL, TTT_IP_BOTH, 12345, false)) {
         ttt_error(1, 0, "tttacctx_init");
     }
 

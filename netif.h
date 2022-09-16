@@ -1,6 +1,8 @@
 #ifndef _TTTNETIF_H
 #define _TTTNETIF_H
 
+#include <stdbool.h>
+
 #ifdef WINDOWS
 #include <winsock2.h>
 #include <winsock.h>
@@ -38,7 +40,7 @@ struct ttt_netif {
 #endif
 
     /* True if bc_addr is valid */
-    int bc_valid;
+    bool bc_valid;
 
     /* The broadcast address of this interface, if applicable. IPv6 doesn't
      * use broadcast addresses, so if this is valid it will be a
@@ -66,7 +68,7 @@ struct ttt_netif {
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
 struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, int include_global);
+ttt_get_multicast_ifs(int address_families_flags, bool include_global);
 
 /* Get a list of all suitable network interfaces which have a broadcast
  * address we can use. We return a pointer to a linked list of struct ttt_netif.
@@ -77,7 +79,7 @@ ttt_get_multicast_ifs(int address_families_flags, int include_global);
  * It is the caller's responsibility to pass the return value to
  * ttt_free_addrs() when it's no longer needed. */
 struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, int include_global);
+ttt_get_broadcast_ifs(int address_families_flags, bool include_global);
 
 /* Free a list of interfaces previously returned by ttt_get_multicast_ifs()
  * or ttt_get_broadcast_ifs(). num_addrs must be the *num_ifaces value
@@ -87,7 +89,7 @@ ttt_get_broadcast_ifs(int address_families_flags, int include_global);
  * on each ttt_netif's sock value if that is non-negative.
  */
 void
-ttt_netif_list_free(struct ttt_netif *list, int close_sockets);
+ttt_netif_list_free(struct ttt_netif *list, bool close_sockets);
 
 /* Find all the multicast-enabled interfaces we can and enable them to receive
  * multicast datagrams on this socket to the given address, which must be in
@@ -99,7 +101,7 @@ ttt_netif_list_free(struct ttt_netif *list, int close_sockets);
  * Return the number of interfaces on which we successfully subscribed to this
  * address. */
 int
-multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, int include_global);
+multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, bool include_global);
 
 /* Undo multicast_interfaces_subscribe(): make it so that the socket no longer
  * receives datagrams to the given multicast address on all multicast-enabled

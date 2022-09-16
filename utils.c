@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdarg.h>
@@ -178,7 +179,7 @@ ttt_mkdir(const char *pathname, int mode) {
 }
 
 int
-ttt_mkdir_parents(const char *pathname_orig, int mode, int parents_only, char dir_sep) {
+ttt_mkdir_parents(const char *pathname_orig, int mode, bool parents_only, char dir_sep) {
     size_t pathname_len;
     char *pathname = strdup(pathname_orig);
     int return_value = 0;

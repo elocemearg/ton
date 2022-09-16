@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -79,19 +80,19 @@ handshake_receive_hello(struct ttt_session *s) {
 
     if (rc < 0) {
         if(errno == EAGAIN || errno == EWOULDBLOCK) {
-            s->want_read = 1;
+            s->want_read = true;
             return -1;
         }
         else {
             ttt_error(0, errno, "handshake read");
-            s->failed = 1;
+            s->failed = true;
             show_ssl_errors(stderr);
             return -1;
         }
     }
     else if (rc == 0) {
         ttt_error(0, 0, "unexpected EOF from peer");
-        s->failed = 1;
+        s->failed = true;
         return -1;
     }
     else {
@@ -102,7 +103,7 @@ handshake_receive_hello(struct ttt_session *s) {
         }
         else {
             ttt_error(0, 0, "unexpected handshake message: %.*s", s->plaintext_handshake_message_pos, s->plaintext_handshake_message);
-            s->failed = 1;
+            s->failed = true;
             return -1;
         }
     }
@@ -123,19 +124,19 @@ handshake_send_hello(struct ttt_session *s) {
 
     if (rc < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            s->want_write = 1;
+            s->want_write = true;
             return -1;
         }
         else {
             ttt_error(0, errno, "handshake write");
-            s->failed = 1;
+            s->failed = true;
             show_ssl_errors(stderr);
             return -1;
         }
     }
     else if (rc == 0) {
         ttt_error(0, 0, "unexpected EOF during handshake write");
-        s->failed = 1;
+        s->failed = true;
         return -1;
     }
     else {
@@ -200,13 +201,13 @@ ttt_session_tls_write(struct ttt_session *s, const void *buf, size_t len) {
     if (rc <= 0) {
         int ssl_err = SSL_get_error(s->ssl, rc);
         if (ssl_err == SSL_ERROR_WANT_READ) {
-            s->want_read = 1;
+            s->want_read = true;
         }
         else if (ssl_err == SSL_ERROR_WANT_WRITE) {
-            s->want_write = 1;
+            s->want_write = true;
         }
         else {
-            s->failed = 1;
+            s->failed = true;
         }
         return -1;
     }
@@ -221,16 +222,16 @@ ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
     if (rc <= 0) {
         int ssl_err = SSL_get_error(s->ssl, rc);
         if (ssl_err == SSL_ERROR_WANT_READ) {
-            s->want_read = 1;
+            s->want_read = true;
         }
         else if (ssl_err == SSL_ERROR_WANT_WRITE) {
-            s->want_write = 1;
+            s->want_write = true;
         }
         else if (ssl_err == SSL_ERROR_ZERO_RETURN) {
             return 0;
         }
         else {
-            s->failed = 1;
+            s->failed = true;
         }
         return -1;
     }
@@ -266,15 +267,15 @@ ttt_session_tls_handshake(struct ttt_session *s) {
          * data or output space, or something more permanent. */
         int ssl_err = SSL_get_error(s->ssl, rc);
         if (ssl_err == SSL_ERROR_WANT_READ) {
-            s->want_read = 1;
+            s->want_read = true;
             return 1;
         }
         else if (ssl_err == SSL_ERROR_WANT_WRITE) {
-            s->want_write = 1;
+            s->want_write = true;
             return 1;
         }
         else {
-            s->failed = 1;
+            s->failed = true;
             show_ssl_errors(stderr);
             return -1;
         }
@@ -372,7 +373,7 @@ ttt_session_tls_init(struct ttt_session *s) {
 
 int
 ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
-        socklen_t addr_len, int use_tls, int is_server) {
+        socklen_t addr_len, bool use_tls, bool is_server) {
     int rc;
 
     memset(s, 0, sizeof(*s));
@@ -380,9 +381,9 @@ ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
     memcpy(&s->addr, addr, addr_len > sizeof(s->addr) ? sizeof(s->addr) : addr_len);
     s->addr_len = addr_len;
 
-    s->want_read = 0;
-    s->want_write = 0;
-    s->failed = 0;
+    s->want_read = false;
+    s->want_write = false;
+    s->failed = false;
     s->is_server = is_server;
     s->next = NULL;
 
@@ -397,7 +398,7 @@ ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
 
 int
 ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
-        socklen_t addr_len, int use_tls) {
+        socklen_t addr_len, bool use_tls) {
     int sock = -1;
     int rc = 0;
 

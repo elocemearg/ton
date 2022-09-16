@@ -4,6 +4,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -131,15 +132,15 @@ main_push(int argc, char **argv) {
     int exit_status = 0;
     int verbose = 0;
     struct ttt_session sess;
-    int sess_valid = 0;
-    int send_full_metadata = 0;
+    bool sess_valid = false;
+    bool send_full_metadata = false;
     char peer_addr[256] = "";
     char peer_port[20] = "";
-    int generated_passphrase = 0;
+    bool generated_passphrase = 0;
     int address_families = 0;
-    int include_global = 0;
-    int prompt_for_passphrase = 0;
-    int hide_passphrase = 0;
+    bool include_global = 0;
+    bool prompt_for_passphrase = 0;
+    bool hide_passphrase = 0;
     struct ttt_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "hvw:46", longopts, NULL)) != -1) {
@@ -164,7 +165,7 @@ main_push(int argc, char **argv) {
                 break;
 
             case PUSH_SEND_FULL_METADATA:
-                send_full_metadata = 1;
+                send_full_metadata = true;
                 break;
 
             case 'w':
@@ -184,15 +185,15 @@ main_push(int argc, char **argv) {
                 break;
 
             case PUSH_INCLUDE_GLOBAL:
-                include_global = 1;
+                include_global = true;
                 break;
 
             case PUSH_PROMPT_PASSPHRASE:
-                prompt_for_passphrase = 1;
+                prompt_for_passphrase = true;
                 break;
 
             case PUSH_HIDE_PASSPHRASE:
-                hide_passphrase = 1;
+                hide_passphrase = true;
                 break;
 
             case 'h':
@@ -201,7 +202,7 @@ main_push(int argc, char **argv) {
                 break;
 
             case 'v':
-                verbose = 1;
+                verbose++;
                 break;
 
             default:
@@ -271,7 +272,7 @@ main_push(int argc, char **argv) {
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
     if (ttt_discover_and_connect(&opts, &sess) == 0) {
-        sess_valid = 1;
+        sess_valid = true;
     }
     else {
         ttt_error(0, 0, "failed to establish connection");

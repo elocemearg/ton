@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <time.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include <sys/types.h>
 
@@ -437,7 +438,7 @@ fail:
 }
 
 int
-tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr, int ipv6) {
+tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr, bool ipv6) {
     char *new_addr = strdup(addr);
     if (new_addr == NULL)
         return -1;
@@ -760,7 +761,7 @@ fail:
 }
 
 int
-tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr, int ipv6) {
+tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr, bool ipv6) {
     char *new_addr = strdup(addr);
     if (new_addr == NULL)
         return -1;
@@ -1011,7 +1012,7 @@ ttt_discover_set_multicast_ttl(struct ttt_discover_options *opts, int ttl) {
 }
 
 void
-ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, int include_global) {
+ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, bool include_global) {
     opts->include_global_addresses = include_global;
 }
 
@@ -1028,7 +1029,7 @@ int
 ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *new_sess) {
     struct tttdlctx dlctx;
     struct tttmcctx mcctx;
-    int ctx_valid = 0;
+    bool ctx_valid = false;
     struct sockaddr_storage peer_addr;
     int peer_addr_len = sizeof(peer_addr);
     PORT peer_invitation_port;
@@ -1041,7 +1042,7 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         ttt_error(0, errno, "failed to initialise listen context");
         return -1;
     }
-    ctx_valid = 1;
+    ctx_valid = true;
 
     /* Initialise a multi-connect context, which is a glorified list of
      * partially-set-up non-blocking outgoing connection attempts. */
@@ -1051,10 +1052,10 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
     /* If we're using any multicast addresses other than the defaults, set
      * them now. */
     if (opts->multicast_address_ipv4) {
-        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv4, 0);
+        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv4, false);
     }
     if (opts->multicast_address_ipv6) {
-        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv6, 1);
+        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv6, true);
     }
 
     ttt_session_set_key(opts->passphrase, opts->passphrase_length);
@@ -1130,7 +1131,7 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
 
     tttdlctx_destroy(&dlctx);
     tttmcctx_destroy(&mcctx);
-    ctx_valid = 0;
+    ctx_valid = false;
 
     /* If we get here, we have discovered our peer and successfully established
      * a TCP connection, encrypted and authenticated using the passphrase. */
@@ -1147,15 +1148,15 @@ fail:
 int
 ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *new_sess) {
     struct tttdactx dactx;
-    int dactx_valid = 0;
+    bool dactx_valid = false;
     struct tttacctx acctx;
-    int acctx_valid = 0;
+    bool acctx_valid = false;
     int announcement;
     char peer_addr_str[100];
     char peer_addr_port[30];
-    const int use_tls = 1;
+    const bool use_tls = true;
     PORT invitation_port4 = 0, invitation_port6 = 0;
-    int new_sess_valid = 0;
+    bool new_sess_valid = false;
     int rc;
     int num_failed_announcements = 0, max_failed_announcements = 10;
 
@@ -1168,13 +1169,13 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     if (tttdactx_init(&dactx, opts) != 0) {
         goto fail;
     }
-    dactx_valid = 1;
+    dactx_valid = true;
 
     /* Open our listening TCP socket on the invitation port. */
     if (tttacctx_init(&acctx, NULL, NULL, opts->address_families, opts->listen_port, use_tls) < 0) {
         goto fail;
     }
-    acctx_valid = 1;
+    acctx_valid = true;
 
     invitation_port4 = tttacctx_get_listen_port(&acctx, AF_INET);
     invitation_port6 = tttacctx_get_listen_port(&acctx, AF_INET6);
@@ -1185,10 +1186,10 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     /* Set the multicast addresses if required, but usually these are expected
      * to stay as their defaults. */
     if (opts->multicast_address_ipv4) {
-        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv4, 0);
+        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv4, false);
     }
     if (opts->multicast_address_ipv6) {
-        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv6, 1);
+        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv6, true);
     }
 
     /* Set the secret passphrase we're going to use for our session.
@@ -1229,7 +1230,7 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
             else {
                 /* Success! new_sess now contains a session which connected to
                  * the correct port and successfully handshook with us. */
-                new_sess_valid = 1;
+                new_sess_valid = true;
                 if (opts->verbose) {
                     if (ttt_session_get_peer_addr(new_sess, peer_addr_str, sizeof(peer_addr_str), peer_addr_port, sizeof(peer_addr_port)) == 0) {
                         fprintf(stderr, "Accepted connection from %s:%s\n", peer_addr_str, peer_addr_port);

@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -168,14 +169,14 @@ tttmcctx_run(struct tttmcctx *ctx, fd_set *writable_fds, fd_set *exception_fds) 
             rc = getsockopt(s->sock, SOL_SOCKET, SO_ERROR, (char *) &err, &err_len);
             if (rc < 0) {
                 ttt_socket_error(0, "getsockopt SO_ERROR");
-                s->failed = 1;
+                s->failed = true;
             }
             else if (err != 0) {
                 /* Failed to connect */
                 if (ctx->verbose) {
                     ttt_socket_error(0, "connect");
                 }
-                s->failed = 1;
+                s->failed = true;
             }
             else {
                 /* Successfully connected. */

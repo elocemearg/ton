@@ -1,6 +1,7 @@
 #ifndef _TTTACCEPT_H
 #define _TTTACCEPT_H
 
+#include <stdbool.h>
 #include <sys/types.h>
 
 #include "utils.h"
@@ -11,7 +12,7 @@ struct tttacctx {
     int listen_socket4, listen_socket6;
     unsigned short listen_port4, listen_port6;
 
-    int use_tls;
+    bool use_tls;
 
     /* A linked list of partially-set-up sessions we've received so far.
      * We take the first one which successfully completes a handshake. */
@@ -23,7 +24,7 @@ struct tttacctx {
 int
 tttacctx_init(struct tttacctx *ctx, const char *listen_addr_ipv4,
         const char *listen_addr_ipv6, int address_families,
-        unsigned short listen_port, int use_tls);
+        unsigned short listen_port, bool use_tls);
 
 /* Get the port number on which this accept context is listening. Useful if
  * 0 was supplied to tttacctx_init() and now you want to know what actual

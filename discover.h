@@ -2,6 +2,7 @@
 #define _TTTDISCOVER_H
 
 #include <sys/types.h>
+#include <stdbool.h>
 
 #include "session.h"
 #include "defaults.h"
@@ -84,7 +85,7 @@ struct ttt_discover_options {
 
     /* Whether to include non-private IP addresses when selecting the network
      * interfaces to send announcements from. */
-    int include_global_addresses;
+    bool include_global_addresses;
 };
 
 /* TTT discovery listen context */
@@ -315,9 +316,9 @@ void
 ttt_discover_set_multicast_ttl(struct ttt_discover_options *opts, int ttl);
 
 /* Specify whether to include globally routable IP addresses in the list of
- * interfaces to send announcements from. Default is no (0). */
+ * interfaces to send announcements from. Default is false. */
 void
-ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, int include_global);
+ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, bool include_global);
 
 /* Convenience function to discover the other host on our network which has
  * our passphrase, and make a TCP connection to them, returning that in
