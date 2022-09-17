@@ -15,7 +15,26 @@ typedef void (*tttdl_listening_cb)(void *);
 
 /* Callback to tell the caller when we receive an announcement datagram,
  * valid or not */
-typedef void (*tttdl_announcement_cb)(void *, const struct sockaddr *, socklen_t, int valid, int invitation_port);
+typedef void (*tttdl_received_announcement_cb)(void *, const struct sockaddr *, socklen_t, int valid, int invitation_port);
+
+/* Callback to report when we send an announcement datagram.
+ * cookie: opaque pointer with meaning only to the caller.
+ * announcement_round_seq: which round of announcements this is. The first
+ *    round of announcements is 0.
+ * iface_addr_seq: index number of the announcement in this round. We make an
+ *    announcement from each network interface's IP address, possibly more than
+ *    once in a round if we need to send to both broadcast and multicast. The
+ *    first successful announcement in a round is 0, the next 1, and so on.
+ * from_addr, from_addr_len: the source address of the announcement we sent.
+ * to_addr, to_addr_len: the destination address of the announcement we sent,
+ *    which may be a multicast address.
+ *
+ * return value: callback should return 0 to say we should continue, or 1
+ *    to say we should give up announcing. */
+typedef int (*tttda_sent_announcement_cb)(void *cookie,
+        int announcement_round_seq, int iface_addr_seq,
+        struct sockaddr *from_addr, socklen_t from_addr_len,
+        struct sockaddr *to_addr, socklen_t to_addr_len);
 
 /* Options struct for ttt_discover_and_connect() and ttt_discover_and_accept(),
  * the two functions called by the pushing and pulling side respectively to
@@ -62,11 +81,17 @@ struct ttt_discover_options {
     tttdl_listening_cb listening_cb;
     void *listening_cb_cookie;
 
-    /* announcement_cb: callback to call when we receive an announcement
-     * datagram, valid or not. See tttdlctx_set_announcement_cb().
+    /* received_announcement_cb: callback to call when we receive an
+     * announcement datagram, valid or not.
      * If NULL, the callback is not used. */
-    tttdl_announcement_cb announcement_cb;
-    void *announcement_cb_cookie;
+    tttdl_received_announcement_cb received_announcement_cb;
+    void *received_announcement_cb_cookie;
+
+    /* sent_announcement_cb: callback called by tttdactx_announce() when we
+     * successfully send an announcement datagram.
+     * If NULL, the callback is not used. */
+    tttda_sent_announcement_cb sent_announcement_cb;
+    void *sent_announcement_cb_cookie;
 
     /* The maximum number of announcements to send on each suitable network
      * interface. If we send this many announcements and we still don't get a
@@ -135,6 +160,11 @@ struct tttdactx {
     /* List of network interfaces which we can use to send multicast packets.
      * Each contains a socket we will bind to that interface's address. */
     struct ttt_netif *multicast_ifs;
+
+    /* The number of announcement rounds we've done so far. In other words,
+     * number of times tttdactx_announce() has been called for this context.
+     * This is passed to opts->received_announcement_cb(). */
+    int announcement_round_seq;
 };
 
 /* Initialise a discover-announce context with the passphrase and other
@@ -299,8 +329,16 @@ ttt_discover_set_listening_callback(struct ttt_discover_options *opts,
  * the cookie argument to announcement_cb() when called.
  * By default, no callback is called for this event. */
 void
-ttt_discover_set_announcement_callback(struct ttt_discover_options *opts,
-        tttdl_announcement_cb announcement_cb, void *cookie);
+ttt_discover_set_received_announcement_callback(struct ttt_discover_options *opts,
+        tttdl_received_announcement_cb received_announcement_cb, void *cookie);
+
+/* Set the callback to be called when ttt_discover_and_accept() sends an
+ * announcemnt packet. cookie is passed to the first argument of the callback.
+ * For details of the other arguments to sent_announcement_cb, see the
+ * definitiopn of tttda_sent_announcement_cb at the top of this file. */
+void
+ttt_discover_set_sent_announcement_callback(struct ttt_discover_options *opts,
+        tttda_sent_announcement_cb sent_announcement_cb, void *cookie);
 
 /* Set the maximum number of announcements ttt_discover_and_accept() should
  * send, and the interval in milliseconds between them. The default is

@@ -535,10 +535,11 @@ tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
                     *peer_addr_length_r = addr_len;
                     discovered = 1;
                 }
-                if (opts->announcement_cb != NULL) {
+                if (opts->received_announcement_cb != NULL) {
                     /* Inform our caller that we got a valid or invalid
                      * announcement... */
-                    opts->announcement_cb(opts->announcement_cb_cookie,
+                    opts->received_announcement_cb(
+                            opts->received_announcement_cb_cookie,
                             (const struct sockaddr *) &peer_addr,
                             addr_len, discovered,
                             discovered ? result.invitation_port : 0);
@@ -632,6 +633,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     dactx->multicast_address_ipv4 = strdup(opts->multicast_address_ipv4);
     dactx->multicast_address_ipv6 = strdup(opts->multicast_address_ipv6);
     dactx->announce_port = opts->discover_port;
+    dactx->announcement_round_seq = 0;
 
     /* To maximise the chance of our announcement reaching our peer, we want
      * to try a broadcast packet on every interface on which we can broadcast,
@@ -803,8 +805,9 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     int num_sockets_succeeded = 0;
     int addr_families[2] = { AF_INET6, AF_INET };
     PORT invitation_ports[2] = { dactx->invitation_port6, dactx->invitation_port4 };
+    bool callback_aborted = false; /* set to true if receive_announcement_cb() aborts us */
 
-    for (int af = 0; af < 2; ++af) {
+    for (int af = 0; !callback_aborted && af < 2; ++af) {
         int addr_family = addr_families[af];
         PORT invitation_port = invitation_ports[af];
         char datagram[262];
@@ -832,7 +835,7 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
             if (list == dactx->multicast_ifs && (opts->announcement_types & TTT_ANNOUNCE_MULTICAST) == 0)
                 continue;
 
-            for (struct ttt_netif *iface = list; iface; iface = iface->next) {
+            for (struct ttt_netif *iface = list; !callback_aborted && iface; iface = iface->next) {
                 ssize_t bytes_sent;
                 struct sockaddr *sa;
                 int sa_len;
@@ -889,11 +892,29 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
                     ttt_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
                 }
                 else {
+                    if (opts->sent_announcement_cb != NULL) {
+                        int rc = opts->sent_announcement_cb(
+                                opts->sent_announcement_cb_cookie,
+                                dactx->announcement_round_seq,
+                                num_sockets_succeeded,
+                                (struct sockaddr *) &iface->if_addr,
+                                iface->if_addr_len, sa, sa_len
+                        );
+                        if (rc != 0) {
+                            ttt_error(0, 0, "announcements aborted");
+                            callback_aborted = true;
+                        }
+                    }
                     num_sockets_succeeded++;
                 }
             }
         }
     }
+
+    dactx->announcement_round_seq++;
+
+    if (callback_aborted)
+        return -1;
 
     /* Return -1 (failure) if every attempt to send failed. */
     if (num_sockets_succeeded == 0) {
@@ -993,10 +1014,17 @@ ttt_discover_set_listening_callback(struct ttt_discover_options *opts,
 }
 
 void
-ttt_discover_set_announcement_callback(struct ttt_discover_options *opts,
-        tttdl_announcement_cb announcement_cb, void *cookie) {
-    opts->announcement_cb = announcement_cb;
-    opts->announcement_cb_cookie = cookie;
+ttt_discover_set_received_announcement_callback(struct ttt_discover_options *opts,
+        tttdl_received_announcement_cb received_announcement_cb, void *cookie) {
+    opts->received_announcement_cb = received_announcement_cb;
+    opts->received_announcement_cb_cookie = cookie;
+}
+
+void
+ttt_discover_set_sent_announcement_callback(struct ttt_discover_options *opts,
+        tttda_sent_announcement_cb sent_announcement_cb, void *cookie) {
+    opts->sent_announcement_cb = sent_announcement_cb;
+    opts->sent_announcement_cb_cookie = cookie;
 }
 
 void

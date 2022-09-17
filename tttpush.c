@@ -265,7 +265,7 @@ main_push(int argc, char **argv) {
     ttt_discover_set_verbose(&opts, verbose);
     ttt_discover_set_listening_callback(&opts, listening_callback,
             generated_passphrase ? passphrase : NULL);
-    ttt_discover_set_announcement_callback(&opts,
+    ttt_discover_set_received_announcement_callback(&opts,
             received_announcement_callback, &verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);
 

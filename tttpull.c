@@ -162,6 +162,19 @@ request_to_send(void *cookie, const struct ttt_file *files, long file_count,
     }
 }
 
+static int
+sent_announcement(void *cookie, int announcement_round_seq, int iface_addr_seq,
+        struct sockaddr *from_addr, socklen_t from_addr_len,
+        struct sockaddr *to_addr, socklen_t to_addr_len) {
+    if (announcement_round_seq > 0 && announcement_round_seq % 10 == 0 && iface_addr_seq == 0) {
+        fprintf(stderr, "Announced to the network %d times but no valid connection received yet.\n"
+                "   Is \"ttt push\" running on the other host?\n"
+                "   Is the passphrase correct?\n",
+                announcement_round_seq);
+    }
+    return 0;
+}
+
 int
 main_pull(int argc, char **argv) {
     int c;
@@ -319,6 +332,7 @@ main_pull(int argc, char **argv) {
     ttt_discover_set_verbose(&opts, verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);
     ttt_discover_set_listen_port(&opts, listen_port);
+    ttt_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
 
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */

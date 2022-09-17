@@ -39,7 +39,7 @@ tttmcctx_add_session(struct tttmcctx *ctx, int new_socket, struct sockaddr *addr
     /* Initialise a TLS session, which when we do the handshake will take the
      * role of client. ttt_session doesn't need to know that new_socket hasn't
      * actually connected yet. */
-    rc = ttt_session_init(s, new_socket, addr, addr_len, 1, 0);
+    rc = ttt_session_init(s, new_socket, addr, addr_len, true, false);
     if (rc < 0) {
         free(s);
         return NULL;
