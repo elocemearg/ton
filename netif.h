@@ -114,4 +114,15 @@ multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, bool in
 int
 multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str);
 
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+/* Used by ttt test. */
+CU_ErrorCode
+ttt_netif_register_tests(void);
+
+#endif
+
 #endif

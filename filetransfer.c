@@ -58,14 +58,19 @@ join_paths(const char *path1, const char *path2, char *dest) {
     size_t path1_len = strlen(path1);
     bool add_sep;
 
-    if (path1[0]) {
-        add_sep = (path1[path1_len - 1] != DIR_SEP);
+    if (path1[0] == '\0' || path2[0] == '\0') {
+        add_sep = false;
     }
     else {
-        add_sep = true;
+        add_sep = (path1[path1_len - 1] != DIR_SEP && path2[0] != DIR_SEP);
+        if (path1[path1_len - 1] == DIR_SEP && path2[0] == DIR_SEP) {
+            /* If path1 ends with a separator and path2 begins with one,
+             * skip the separators after the start of path2 */
+            while (path2[0] == DIR_SEP)
+                path2++;
+        }
     }
 
-    /* Translate / back into the local directory separator */
     sprintf(dest, "%s%s%s", path1, add_sep ? DIR_SEP_STR : "", path2);
 }
 
@@ -366,11 +371,6 @@ make_dir_component_legal_on_windows(char *p) {
  *
  * The returned string is created by malloc() and it is the caller's
  * responsibility to free() it.
- *
- * ("alpha/bravo/charlie.txt", "/home/fred") => "/home/fred/alpha/bravo/charlie.txt"
- * ("alpha.txt", "/home/fred/") => "/home/fred/alpha.txt"
- * ("alpha/bravo.txt", "/home/fred///") => "/home/fred///alpha/bravo.txt"
- * ("alpha/bravo.txt", ".") => "./alpha/bravo.txt"
  */
 static char *
 ttt_path_to_local_path(const char *ttt_path, const char *local_base_dir) {
@@ -1903,3 +1903,188 @@ ttt_file_transfer_destroy(struct ttt_file_transfer *ctx) {
     free(ctx->source_paths);
     free(ctx->output_dir);
 }
+
+/*****************************************************************************/
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+static void
+str_replace(char *str, char out, char in) {
+    for (; *str; str++) {
+        if (*str == out)
+            *str = in;
+    }
+}
+
+static void
+test_join_paths(void) {
+    struct {
+        const char *path1;
+        const char *path2;
+        const char *expected;
+    } test_cases[] = {
+        { "alpha/bravo", "charlie/delta", "alpha/bravo/charlie/delta" },
+        { "", "", "" },
+        { "alpha", "bravo", "alpha/bravo" },
+        { "/absolute/path/", "/foo/bar/", "/absolute/path/foo/bar/" },
+        { "foo/", "/bar", "foo/bar" },
+        { "foo", "/bar", "foo/bar" },
+        { "foo/", "bar", "foo/bar" },
+        { "foo/bar/baz", "", "foo/bar/baz" },
+        { "", "foo/bar/baz", "foo/bar/baz" },
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        char *path1 = strdup(test_cases[i].path1);
+        char *path2 = strdup(test_cases[i].path2);
+        char *expected = strdup(test_cases[i].expected);
+        char *observed = malloc(strlen(path1) + strlen(path2) + 2);
+        char test_num[20];
+        sprintf(test_num, "%d", i);
+
+        /* Replace / with the local directory separator */
+        str_replace(path1, '/', DIR_SEP);
+        str_replace(path2, '/', DIR_SEP);
+        str_replace(expected, '/', DIR_SEP);
+
+        join_paths(path1, path2, observed);
+
+        if (strcmp(observed, expected)) {
+            fprintf(stderr, "test_join_paths: path1 \"%s\", path2 \"%s\", expected \"%s\", observed \"%s\"\n", path1, path2, expected, observed);
+        }
+        CU_ASSERT_STRING_EQUAL(observed, expected);
+
+        free(path1);
+        free(path2);
+        free(expected);
+        free(observed);
+    }
+}
+
+static void
+test_local_path_to_ttt_path(void) {
+    struct {
+        const char *local_path;
+        const char *expected;
+    } test_cases[] = {
+        { "/foo/bar/baz", "foo/bar/baz" },
+        { "foo/bar/baz", "foo/bar/baz" },
+        { "foo", "foo" }
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        char *local_path = strdup(test_cases[i].local_path);
+        const char *expected = test_cases[i].expected;
+        char *observed;
+
+        str_replace(local_path, '/', DIR_SEP);
+
+        observed = local_path_to_ttt_path(local_path);
+        if (strcmp(observed, expected) != 0) {
+            fprintf(stderr, "test_local_path_to_ttt_path: local_path \"%s\", expected \"%s\", observed \"%s\"\n", local_path, expected, observed);
+        }
+        CU_ASSERT_STRING_EQUAL(observed, expected);
+
+        free(observed);
+        free(local_path);
+    }
+}
+
+static void
+test_ttt_path_to_local_path(void) {
+    struct {
+        const char *ttt_path;
+        const char *local_base_dir;
+        const char *expected;
+    } test_cases[] = {
+        { "alpha/bravo/charlie.txt", "/home/fred", "/home/fred/alpha/bravo/charlie.txt" },
+        { "alpha.txt", "/home/fred/", "/home/fred/alpha.txt" },
+        { "alpha/bravo.txt", "/home/fred///", "/home/fred///alpha/bravo.txt" },
+        { "alpha/bravo.txt", ".", "./alpha/bravo.txt" },
+        { "foo/bar/baz", "../some/dest", "../some/dest/foo/bar/baz" },
+#ifdef WINDOWS
+        { "s<om>e/ill:egal\\file|name/te*st?txt", "C:\\my\\dir",
+            "C:\\my\\dir\\s_om_e\\ill_egal_file_name\\te_st_txt" }
+#endif
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        const char *ttt_path = test_cases[i].ttt_path;
+        char *local_base_dir = strdup(test_cases[i].local_base_dir);
+        char *expected = strdup(test_cases[i].expected);
+        char *observed;
+
+        str_replace(local_base_dir, '/', DIR_SEP);
+        str_replace(expected, '/', DIR_SEP);
+
+        observed = ttt_path_to_local_path(ttt_path, local_base_dir);
+        if (strcmp(observed, expected) != 0) {
+            fprintf(stderr, "test_ttt_path_to_local_path(): ttt_path \"%s\", local_base_dir \"%s\", expected \"%s\", observed \"%s\"\n",
+                    ttt_path, local_base_dir, expected, observed);
+        }
+        CU_ASSERT_STRING_EQUAL(observed, expected);
+
+        free(observed);
+        free(local_base_dir);
+        free(expected);
+    }
+}
+
+void
+test_timeval_add(void) {
+    struct {
+        struct timeval t1;
+        struct timeval t2;
+        struct timeval expected;
+    } test_cases[] = {
+        { { 0, 0 }, { 0, 0 }, { 0, 0 } },
+        { { 5, 400000 }, { 6, 700000 }, { 12, 100000 } },
+        { { 1663420372, 900000 }, { 0, 500000 }, { 1663420373, 400000 } },
+        { { 1663420372, 500000 }, { 0, 500000 }, { 1663420373, 0 } },
+        { { 1663420372, 400000 }, { 0, 500000 }, { 1663420372, 900000 } },
+        { { 1663420372, 600000 }, { 0, 10500000 }, { 1663420383, 100000 } },
+        { { 1663420372, 999999 }, { 0, 1 }, { 1663420373, 0 } },
+        { { 1663420372, 123456 }, { 0, 0 }, { 1663420372, 123456 } }
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        struct timeval observed;
+        struct timeval *t1 = &test_cases[i].t1;
+        struct timeval *t2 = &test_cases[i].t2;
+        struct timeval *expected = &test_cases[i].expected;
+
+        timeval_add(t1, t2, &observed);
+
+        if (expected->tv_sec != observed.tv_sec || expected->tv_usec != observed.tv_usec) {
+            fprintf(stderr, "test_timeval_add: t1 (%d, %d), t2 (%d, %d), expected (%d, %d), observed (%d, %d)\n",
+                    (int) t1->tv_sec, (int) t1->tv_usec,
+                    (int) t2->tv_sec, (int) t2->tv_usec,
+                    (int) expected->tv_sec, (int) expected->tv_usec,
+                    (int) observed.tv_sec, (int) observed.tv_usec);
+        }
+        CU_ASSERT_EQUAL(observed.tv_sec, expected->tv_sec);
+        CU_ASSERT_EQUAL(observed.tv_usec, expected->tv_usec);
+    }
+}
+
+CU_ErrorCode
+ttt_filetransfer_register_tests(void) {
+    CU_TestInfo tests[] = {
+        { "join_paths", test_join_paths },
+        { "local_path_to_ttt_path", test_local_path_to_ttt_path },
+        { "ttt_path_to_local_path", test_ttt_path_to_local_path },
+        { "timeval_add", test_timeval_add },
+        CU_TEST_INFO_NULL
+    };
+
+    CU_SuiteInfo suites[] = {
+        { "filetransfer", NULL, NULL, NULL, NULL, tests },
+        CU_SUITE_INFO_NULL
+    };
+
+    return CU_register_suites(suites);
+}
+
+#endif

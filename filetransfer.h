@@ -191,4 +191,15 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
 void
 ttt_file_transfer_destroy(struct ttt_file_transfer *ctx);
 
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+/* Used by ttt test. */
+CU_ErrorCode
+ttt_filetransfer_register_tests(void);
+
+#endif
+
 #endif

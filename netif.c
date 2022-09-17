@@ -527,3 +527,240 @@ int
 multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str) {
     return multicast_interfaces_change_membership(sock, multicast_addr_str, false, true);
 }
+
+/*****************************************************************************/
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+static void
+address_from_string(const char *str, struct sockaddr_storage *addr, socklen_t *addr_len) {
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    int rc;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = 0;
+    hints.ai_flags = AI_PASSIVE;
+
+    rc = getaddrinfo(str, NULL, &hints, &res);
+    if (rc != 0) {
+        ttt_error(1, 0, "%s: %s", str, gai_strerror(rc));
+    }
+
+    *addr_len = res->ai_addrlen;
+    memcpy(addr, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+}
+
+
+static void
+test_is_address_private(void) {
+    const char *private_addresses[] = {
+        "192.168.1.1",
+        "192.168.0.255",
+        "192.168.255.255",
+        "192.168.123.45",
+        "10.0.0.1",
+        "10.4.60.254",
+        "10.255.0.1",
+        "169.254.0.1",
+        "169.254.64.42",
+        "169.254.255.255",
+        "172.16.0.1",
+        "172.16.40.50",
+        "172.23.20.100",
+        "172.24.160.10",
+        "172.31.255.255",
+        "127.0.0.1",
+        "127.127.127.127",
+        "fc00::1",
+        "fcff::dead:beef",
+        "fd02:aabb:ccdd:eeff::1",
+        "fd80::1",
+        "fe80::1",
+        "fe90::2",
+        "fea0::3",
+        "feb0::4",
+        "febf::5",
+        "::1",
+    };
+
+    const char *non_private_addresses[] = {
+        "192.167.255.255",
+        "192.169.0.1",
+        "9.255.255.255",
+        "11.4.5.6",
+        "169.255.0.7",
+        "169.253.0.1",
+        "172.15.255.4",
+        "172.32.0.0",
+        "172.40.0.2",
+        "128.0.0.1",
+        "2001:db8::d0c",
+        "890a:bcde:f012::3456",
+        "::2",
+        "fe00::1",
+        "fe7f::beef",
+        "ff08::f00d",
+    };
+
+    int num_priv = sizeof(private_addresses) / sizeof(private_addresses[0]);
+    int num_non_priv = sizeof(non_private_addresses) / sizeof(non_private_addresses[0]);
+
+    for (int i = 0; i < num_priv + num_non_priv; ++i) {
+        bool expected;
+        bool observed;
+        const char *addr_str;
+        struct sockaddr_storage addr;
+        socklen_t addr_len = sizeof(struct sockaddr_storage);
+        
+        if (i < num_priv) {
+            expected = true;
+            addr_str = private_addresses[i];
+        }
+        else {
+            expected = false;
+            addr_str = non_private_addresses[i - num_priv];
+        }
+
+        address_from_string(addr_str, &addr, &addr_len);
+
+        observed = is_address_private((struct sockaddr *) &addr);
+        if (expected != observed) {
+            fprintf(stderr, "test_is_address_private: address \"%s\", expected %s, observed %s\n",
+                    addr_str, expected ? "true" : "false", observed ? "true" : "false");
+        }
+        CU_ASSERT_EQUAL(observed, expected);
+    }
+}
+
+/* Allocate and return a struct ttt_netif object with the given interface
+ * address and interface index, for testing purposes. */
+static struct ttt_netif *
+make_simple_netif(const char *addr_str, int if_index) {
+    struct ttt_netif *netif = ttt_netif_new();
+    int rc;
+    struct addrinfo hints;
+    struct addrinfo *res;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = 0;
+    hints.ai_flags = AI_PASSIVE;
+
+    rc = getaddrinfo(addr_str, NULL, &hints, &res);
+    if (rc != 0) {
+        ttt_error(1, 0, "%s: %s", addr_str, gai_strerror(rc));
+    }
+
+    netif->family = res->ai_family;
+    if (netif->family == AF_INET) {
+        netif->if_index_ipv4 = if_index;
+        netif->if_index_ipv6 = -1;
+    }
+    else {
+        netif->if_index_ipv6 = if_index;
+        netif->if_index_ipv4 = -1;
+    }
+    memcpy(&netif->if_addr, res->ai_addr, res->ai_addrlen);
+    netif->if_addr_len = res->ai_addrlen;
+    netif->next = NULL;
+
+    freeaddrinfo(res);
+
+    return netif;
+}
+
+static void
+test_netif_list_sort(void) {
+    struct ttt_netif *first, *last;
+    int idx;
+    struct ttt_netif *list[] = {
+        make_simple_netif("192.168.1.4", 0),
+        make_simple_netif("fe80:abcd:ef01::1", 2),
+        make_simple_netif("10.0.0.42", 1),
+        make_simple_netif("192.168.1.4", 0),
+        make_simple_netif("fdaa:bbcc:ddee::f00d", 1),
+        make_simple_netif("fe80:abcd:ef01::1", 2),
+        make_simple_netif("2001:db8::d0c", 0),
+    };
+
+    /* We expect the interface list to be sorted with IPv6 addresses first,
+     * and within each address family, in descending order of address. */
+    const char *expected_addresses[] = {
+        "fe80:abcd:ef01::1",
+        "fdaa:bbcc:ddee::f00d",
+        "2001:db8::d0c",
+        "192.168.1.4",
+        "10.0.0.42",
+        NULL
+    };
+
+    /* Connect up the list elements */
+    for (int i = 0; i < sizeof(list) / sizeof(list[0]); i++) {
+        if (i == 0) {
+            first = list[i];
+        }
+        else {
+            list[i - 1]->next = list[i];
+            list[i]->next = NULL;
+            last = list[i];
+        }
+    }
+
+    /* Sort and de-dupe the list */
+    netif_list_sort(&first, &last);
+    netif_remove_duplicates(&first, &last);
+
+    /* Check that the sort and dedupe has left the correct netif objects
+     * and in the correct order. */
+    idx = 0;
+    for (struct ttt_netif *iface = first; iface; iface = iface->next) {
+        const char *expected_address = expected_addresses[idx];
+        if (expected_address == NULL) {
+            CU_FAIL("netif_remove_duplicates() left a longer list than expected");
+        }
+        else {
+            char observed_address[100];
+            int rc = getnameinfo((struct sockaddr *) &iface->if_addr,
+                    iface->if_addr_len, observed_address,
+                    sizeof(observed_address), NULL, 0,
+                    NI_NUMERICHOST | NI_NUMERICSERV);
+            if (rc != 0) {
+                ttt_error(1, 0, "getnameinfo (index %d): %s", idx, gai_strerror(rc));
+            }
+            if (strcmp(observed_address, expected_address) != 0) {
+                fprintf(stderr, "test_netif_list_sort: idx %d: expected %s, observed %s\n", idx, expected_address, observed_address);
+            }
+            CU_ASSERT_STRING_EQUAL(observed_address, expected_address);
+        }
+        idx++;
+    }
+    CU_ASSERT_EQUAL(idx, sizeof(expected_addresses) / sizeof(expected_addresses[0]) - 1);
+
+    /* Free the temporary netif objects left in the list. Don't free all
+     * elements of "list" because some of those were removed and freed by
+     * netif_remove_duplicates(). */
+    ttt_netif_list_free(first, false);
+}
+
+CU_ErrorCode
+ttt_netif_register_tests(void) {
+    CU_TestInfo tests[] = {
+        { "is_address_private", test_is_address_private },
+        { "netif_list_sort", test_netif_list_sort },
+        CU_TEST_INFO_NULL
+    };
+
+    CU_SuiteInfo suites[] = {
+        { "netif", NULL, NULL, NULL, NULL, tests },
+        CU_SUITE_INFO_NULL
+    };
+
+    return CU_register_suites(suites);
+}
+
+#endif

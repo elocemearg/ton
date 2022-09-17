@@ -4,6 +4,9 @@
 
 #include "tttpush.h"
 #include "tttpull.h"
+#ifdef TTT_UNIT_TESTS
+#include "ttttest.h"
+#endif
 #include "utils.h"
 
 int main(int argc, char **argv) {
@@ -27,6 +30,14 @@ int main(int argc, char **argv) {
     }
     else if (!strcmp(verb, "pull")) {
         ret = main_pull(argc - 1, argv + 1);
+    }
+    else if (!strcmp(verb, "test")) {
+#ifdef TTT_UNIT_TESTS
+        ret = main_test(argc - 1, argv + 1);
+#else
+        fprintf(stderr, "ttt was not compiled with CUnit support.\n");
+        ret = 1;
+#endif
     }
     else {
         fprintf(stderr, "Unknown command %s\nTry \"ttt push\" or \"ttt pull\".\n", verb);
