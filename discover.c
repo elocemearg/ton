@@ -932,6 +932,7 @@ ttt_discover_options_init(struct ttt_discover_options *opts, const char *passphr
     opts->passphrase = malloc(passphrase_length + 1);
     memcpy(opts->passphrase, passphrase, passphrase_length);
     opts->passphrase[passphrase_length] = '\0';
+    opts->passphrase_length = passphrase_length;
     opts->discover_port = TTT_DEFAULT_DISCOVER_PORT;
     opts->listen_port = TTT_DEFAULT_LISTEN_PORT;
     opts->max_announcements = 0;
