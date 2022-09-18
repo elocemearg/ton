@@ -209,7 +209,9 @@ int
 ttt_mkdir_parents(const char *pathname_orig, int mode, bool parents_only, char dir_sep) {
     size_t pathname_len;
     char *pathname = strdup(pathname_orig);
+    char *last_dir_sep = NULL;
     int return_value = 0;
+    STAT st;
 
     if (pathname == NULL)
         return -1;
@@ -219,6 +221,24 @@ ttt_mkdir_parents(const char *pathname_orig, int mode, bool parents_only, char d
     while (pathname_len > 0 && pathname[pathname_len - 1] == dir_sep)
         pathname[--pathname_len] = '\0';
 
+    /* First, check if this path, (or its parent if parents_only is set),
+     * already exists as a directory. If so, there's nothing to do and we
+     * don't need to check each component in turn. */
+    if (parents_only) {
+        last_dir_sep = strrchr(pathname, dir_sep);
+        if (last_dir_sep) {
+            *last_dir_sep = '\0';
+        }
+    }
+    if (ttt_stat(pathname, &st) == 0 && S_ISDIR(st.st_mode)) {
+        /* deepest level directory we would create already exists */
+        free(pathname);
+        return 0;
+    }
+    /* Undo our vandalism of the pathname and carry on... */
+    if (last_dir_sep)
+        *last_dir_sep = dir_sep;
+
     /* For every sub-path that's a prefix of this one, check if the directory
      * exists and create it if it doesn't.
      * Note we also iterate round the loop when pos == pathname_len, so that
@@ -227,7 +247,6 @@ ttt_mkdir_parents(const char *pathname_orig, int mode, bool parents_only, char d
      * /tmp/dest/a.txt we don't try to create "/" */
     for (size_t pos = 1; pos <= pathname_len; pos++) {
         if (pathname[pos] == dir_sep || (!parents_only && pathname[pos] == '\0')) {
-            STAT st;
             /* Does pathname[0 to pos] exist as a directory? */
             pathname[pos] = '\0';
             if (ttt_stat(pathname, &st) < 0 && errno == ENOENT) {

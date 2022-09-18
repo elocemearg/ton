@@ -136,6 +136,11 @@ struct ttt_file_transfer {
     /* Opaque pointer set by ttt_file_transfer_set_callback_cookie() and passed
      * to the callback functions. */
     void *callback_cookie;
+
+    /* If not NULL, all the files we receive get written to this file. If
+     * we receive more than one file, separating them out again is the user's
+     * problem. */
+    FILE *output_file;
 };
 
 /* Initialise a file transfer context in which we initially have the sender
@@ -176,6 +181,12 @@ ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_pr
  * the files (value == 0). */
 void
 ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value);
+
+/* If f != NULL, write all the data in all the files we receive to f.
+ * If f == NULL, files we receive get written to the output directory as normal.
+ */
+void
+ttt_file_transfer_set_output_file(struct ttt_file_transfer *ctx, FILE *f);
 
 /* Starts a file transfer session set up with a previous call to
  * ttt_file_transfer_init_sender() or ttt_file_transfer_init_receiver(), using

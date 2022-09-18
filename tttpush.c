@@ -35,6 +35,7 @@ enum main_push_longopts {
     PUSH_PROMPT_PASSPHRASE,
     PUSH_HIDE_PASSPHRASE,
     PUSH_TIMEOUT,
+    PUSH_QUIET,
 };
 
 static const struct option longopts[] = {
@@ -50,6 +51,7 @@ static const struct option longopts[] = {
     { "prompt-passphrase", 0, NULL, PUSH_PROMPT_PASSPHRASE },
     { "hide-passphrase", 0, NULL, PUSH_HIDE_PASSPHRASE },
     { "timeout", 1, NULL, PUSH_TIMEOUT },
+    { "quiet", 0, NULL, PUSH_QUIET },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
 
@@ -88,16 +90,27 @@ print_help(FILE *f) {
         TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4, TTT_MULTICAST_GROUP_IPV6);
 }
 
+
+static void
+report_generated_passphrase(const char *passphrase) {
+    if (passphrase != NULL) {
+        /* Tell the user what passphrase we generated.
+         * If we generated the passphrase rather than having it specified by
+         * the user, then we asked ttt_discover_and_connect to pass our
+         * passphrase as the cookie. */
+        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
+        fprintf(stderr, "    %s\n", passphrase);
+    }
+}
+
+static void
+quiet_listening_callback(void *cookie) {
+    report_generated_passphrase((const char *) cookie);
+}
+
 static void
 listening_callback(void *cookie) {
-    if (cookie != NULL) {
-        /* Tell the user what passphrase we generated, now that everything
-         * else is set up. If we generated the passphrase rather than having
-         * it specified by the user, then we asked ttt_discover_and_connect to
-         * pass our passphrase as the cookie. */
-        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
-        fprintf(stderr, "    %s\n", (char *) cookie);
-    }
+    report_generated_passphrase((const char *) cookie);
     fprintf(stderr, "\nWaiting for announcement from the destination...\n");
 }
 
@@ -135,6 +148,7 @@ main_push(int argc, char **argv) {
     int num_files_to_push = 0;
     int exit_status = 0;
     int verbose = 0;
+    bool quiet = false;
     struct ttt_session sess;
     bool sess_valid = false;
     bool send_full_metadata = false;
@@ -148,7 +162,7 @@ main_push(int argc, char **argv) {
     double connect_timeout_sec = 0;
     struct ttt_discover_options opts;
 
-    while ((c = getopt_long(argc, argv, "hvt:w:46", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hqvt:w:46", longopts, NULL)) != -1) {
         switch (c) {
             case PUSH_PASSPHRASE:
                 passphrase = strdup(optarg);
@@ -212,6 +226,11 @@ main_push(int argc, char **argv) {
                 }
                 break;
 
+            case PUSH_QUIET:
+            case 'q':
+                quiet = true;
+                break;
+
             case 'h':
                 print_help(stdout);
                 exit(0);
@@ -238,9 +257,10 @@ main_push(int argc, char **argv) {
     files_to_push = argv + optind;
     num_files_to_push = argc - optind;
 
-    /* Quick sanity check on the named paths: does each one exist? */
+    /* Quick sanity check on the named paths: does each one exist?
+     * "-" is a special case meaning stdin. */
     for (int i = 0; i < num_files_to_push; ++i) {
-        if (access(files_to_push[i], F_OK) != 0) {
+        if (strcmp(files_to_push[i], "-") != 0 && access(files_to_push[i], F_OK) != 0) {
             ttt_error(0, errno, "%s", files_to_push[i]);
             exit_status = 1;
         }
@@ -279,12 +299,15 @@ main_push(int argc, char **argv) {
     ttt_discover_set_address_families(&opts, address_families);
     ttt_discover_set_discover_port(&opts, discover_port);
     ttt_discover_set_verbose(&opts, verbose);
-    ttt_discover_set_listening_callback(&opts, listening_callback,
+    ttt_discover_set_listening_callback(&opts,
+            quiet ? quiet_listening_callback : listening_callback,
             generated_passphrase ? passphrase : NULL);
-    ttt_discover_set_received_announcement_callback(&opts,
-            received_announcement_callback, &verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);
     ttt_discover_set_connect_timeout(&opts, (int)(connect_timeout_sec * 1000));
+    if (!quiet) {
+        ttt_discover_set_received_announcement_callback(&opts,
+                received_announcement_callback, &verbose);
+    }
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
@@ -299,17 +322,23 @@ main_push(int argc, char **argv) {
     if (sess_valid) {
         struct ttt_file_transfer ctx;
 
-        /* Announce that we successfully found the other endpoint */
-        if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
-            fprintf(stderr, "Established connection.\n");
-        }
-        else {
-            fprintf(stderr, "Established connection to %s port %s.\n", peer_addr, peer_port);
+        if (!quiet) {
+            /* Tell the user we successfully found the other endpoint */
+            if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+                fprintf(stderr, "Established connection.\n");
+            }
+            else {
+                fprintf(stderr, "Established connection to %s port %s.\n", peer_addr, peer_port);
+            }
         }
 
         /* Set up the file transfer session as sender */
         ttt_file_transfer_init_sender(&ctx, (const char **) files_to_push, num_files_to_push);
         ttt_file_transfer_set_send_full_metadata(&ctx, send_full_metadata);
+
+        if (quiet) {
+            ttt_file_transfer_set_progress_callback(&ctx, NULL);
+        }
 
         /* Run the file transfer session and send our files */
         exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);

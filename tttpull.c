@@ -28,6 +28,8 @@ enum main_pull_longopts {
     PULL_BROADCAST,
     PULL_INCLUDE_GLOBAL,
     PULL_HIDE_PASSPHRASE,
+    PULL_OUTPUT_FILE,
+    PULL_QUIET,
 };
 
 static const struct option longopts[] = {
@@ -48,6 +50,8 @@ static const struct option longopts[] = {
     { "broadcast", 0, NULL, PULL_BROADCAST },
     { "include-global", 0, NULL, PULL_INCLUDE_GLOBAL },
     { "hide-passphrase", 0, NULL, PULL_HIDE_PASSPHRASE },
+    { "output-file", 1, NULL, PULL_OUTPUT_FILE },
+    { "quiet", 0, NULL, PULL_QUIET },
 
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
@@ -84,9 +88,12 @@ print_help(FILE *f) {
 "                             Announce to IPv6 multicast address <a> (default\n"
 "                               %s)\n"
 "    --multicast-ttl <n>      Set multicast TTL to <n> (default 1)\n"
+"    -q, --quiet              Don't show progress updates\n"
 "    -o <dir>                 Destination directory for received file(s).\n"
 "                               Default is the current directory. The directory\n"
 "                               will be created if it doesn't exist.\n"
+"                               Use - to write all received files to stdout.\n"
+"    --output-file <file>     Concatenate all received files to one output file\n"
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
@@ -180,6 +187,7 @@ int
 main_pull(int argc, char **argv) {
     int c;
     int verbose = 0;
+    bool quiet = false;
     int max_announcements = 0;
     double announcement_interval_sec = 1.0;
     int discover_port = -1;
@@ -190,7 +198,7 @@ main_pull(int argc, char **argv) {
     struct ttt_session sess;
     bool sess_valid = 0;
     int exit_status = 0;
-    char *output_dir = ".";
+    char *output_dir = NULL;
     bool confirm_file_set = 0;
     char peer_addr[256] = "";
     char peer_port[20] = "";
@@ -198,9 +206,10 @@ main_pull(int argc, char **argv) {
     int announce_types = 0;
     bool include_global = 0;
     bool hide_passphrase = 0;
+    char *output_filename = NULL;
     struct ttt_discover_options opts;
 
-    while ((c = getopt_long(argc, argv, "ho:v46", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "ho:qv46", longopts, NULL)) != -1) {
         switch (c) {
             case PULL_MAX_ANNOUNCEMENTS:
                 max_announcements = atoi(optarg);
@@ -286,7 +295,21 @@ main_pull(int argc, char **argv) {
                 break;
 
             case 'o':
-                output_dir = optarg;
+                if (!strcmp(optarg, "-")) {
+                    output_filename = "-";
+                }
+                else {
+                    output_dir = optarg;
+                }
+                break;
+
+            case PULL_OUTPUT_FILE:
+                output_filename = optarg;
+                break;
+
+            case PULL_QUIET:
+            case 'q':
+                quiet = true;
                 break;
 
             case 'h':
@@ -309,6 +332,17 @@ main_pull(int argc, char **argv) {
 
     if (announce_types == 0) {
         announce_types = TTT_ANNOUNCE_BOTH;
+    }
+
+    if (output_filename != NULL && output_dir != NULL) {
+        /* We can't have an output file and an output directory. */
+        ttt_error(1, 0, "-o and --output-file may not be combined");
+    }
+
+    if (output_dir == NULL) {
+        /* Default output directory is the current directory, unless we're
+         * writing everything to a single file (--output-file) */
+        output_dir = ".";
     }
 
     if (passphrase == NULL) {
@@ -338,7 +372,10 @@ main_pull(int argc, char **argv) {
     ttt_discover_set_verbose(&opts, verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);
     ttt_discover_set_listen_port(&opts, listen_port);
-    ttt_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
+
+    if (!quiet) {
+        ttt_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
+    }
 
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */
@@ -352,13 +389,16 @@ main_pull(int argc, char **argv) {
 
     if (sess_valid) {
         struct ttt_file_transfer ctx;
+        FILE *output_file = NULL;
 
-        /* Announce that we successfully found the other endpoint */
-        if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
-            fprintf(stderr, "Established connection.\n");
-        }
-        else {
-            fprintf(stderr, "Established connection from %s.\n", peer_addr);
+        if (!quiet) {
+            /* Tell the user we successfully found the other endpoint */
+            if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+                fprintf(stderr, "Established connection.\n");
+            }
+            else {
+                fprintf(stderr, "Established connection from %s.\n", peer_addr);
+            }
         }
 
         /* Set up the file transfer session as receiver... */
@@ -368,10 +408,41 @@ main_pull(int argc, char **argv) {
             ttt_file_transfer_set_request_to_send_callback(&ctx, request_to_send);
         }
 
+        /* If we're writing all received files to a single output file, open
+         * that file now. */
+        if (output_filename != NULL) {
+            if (!strcmp(output_filename, "-")) {
+                /* Write everything to stdout */
+                output_file = stdout;
+            }
+            else {
+                /* Write everything to a named file */
+                output_file = fopen(output_filename, "wb");
+                if (output_file == NULL) {
+                    ttt_error(1, errno, "%s", output_filename);
+                }
+            }
+        }
+        if (output_file != NULL) {
+            ttt_file_transfer_set_output_file(&ctx, output_file);
+        }
+
+        if (quiet) {
+            ttt_file_transfer_set_progress_callback(&ctx, NULL);
+        }
+
         /* Run the file transfer session and receive files. */
         exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);
         ttt_session_destroy(&sess);
         ttt_file_transfer_destroy(&ctx);
+
+        if (output_file != NULL) {
+            /* Close our output file, if we have one. */
+            if (fclose(output_file) == EOF) {
+                ttt_error(0, errno, "%s", output_filename);
+                exit_status = 1;
+            }
+        }
     }
 
     free(passphrase);

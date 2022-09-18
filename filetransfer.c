@@ -504,20 +504,33 @@ fail:
 
 /* ttt_dir_walk() callback function used by ttt_file_transfer_session_sender().
  * Adds a ttt_file object for the named file to a list (=cookie), deriving
- * the ttt_file object's ttt_path fields from path and orig_path_start. */
+ * the ttt_file object's ttt_path fields from path and orig_path_start.
+ * If orig_path_start is -1, the file represents stdin and st is ignored. */
 static int
 add_local_file_to_list(void *cookie, const char *path, STAT *st, int orig_path_start) {
     struct ttt_file_list *list = (struct ttt_file_list *) cookie;
     struct ttt_file *file = NULL;
 
-    file = ttt_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
+    if (orig_path_start < 0) {
+        /* stdin */
+        file = ttt_file_new("-", NULL, time(NULL), S_IFREG | 0644, -1);
+    }
+    else {
+        /* an actual file */
+        file = ttt_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
+    }
     if (file == NULL) {
         ttt_error(0, errno, "failed to create new file object structure for %s", path);
         return -1;
     }
     file->next = NULL;
 
-    file->ttt_path = local_path_to_ttt_path(path + orig_path_start);
+    if (orig_path_start < 0 && !strcmp(path, "-")) {
+        file->ttt_path = strdup("stdin");
+    }
+    else {
+        file->ttt_path = local_path_to_ttt_path(path + orig_path_start);
+    }
     if (file->ttt_path == NULL) {
         ttt_file_free(file);
         return -1;
@@ -853,6 +866,11 @@ is_progress_report_due(struct ttt_file_transfer *ctx) {
     return 0;
 }
 
+static bool
+ttt_file_is_stdin(const struct ttt_file *f) {
+    return (!strcmp(f->local_path, "-") && !strcmp(f->ttt_path, "stdin"));
+}
+
 /* Already within a TTT_MSG_FILE_SET_START/TTT_MSG_FILE_SET_END block, send
  * a TTT_MSG_FILE_METADATA message, data chunks and TTT_MSG_FILE_DATA_END
  * message for the given file.
@@ -902,7 +920,13 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         /* This is a regular file.
          * Open the file we want to send. If this fails, tell the receiver that
          * there will be no data for this file and that we failed to send it. */
-        stream = fopen(f->local_path, "rb");
+
+        if (ttt_file_is_stdin(f)) {
+            stream = stdin;
+        }
+        else {
+            stream = fopen(f->local_path, "rb");
+        }
         if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
             fclose(stream);
             stream = NULL;
@@ -948,7 +972,8 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
                         goto fail;
                     }
-                    *total_size -= f->size - file_position;
+                    if (*total_size >= 0)
+                        *total_size -= f->size - file_position;
                 }
                 else {
                     /* End of file. We read and sent everything successfully. */
@@ -988,8 +1013,9 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
     }
 
 end:
-    if (stream)
+    if (stream && stream != stdin) {
         fclose(stream);
+    }
 
     return return_value;
 
@@ -1027,7 +1053,13 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
     /* Build a list of all the files we want to send */
     ttt_file_list_init(&file_list);
     for (int i = 0; i < ctx->num_source_paths; ++i) {
-        rc = ttt_dir_walk(ctx->source_paths[i], add_local_file_to_list, &file_list);
+        if (!strcmp(ctx->source_paths[i], "-")) {
+            /* Special case - we'll read stdin and send that as a file */
+            rc = add_local_file_to_list(&file_list, "-", NULL, -1);
+        }
+        else {
+            rc = ttt_dir_walk(ctx->source_paths[i], add_local_file_to_list, &file_list);
+        }
         if (rc < 0) {
             goto fail;
         }
@@ -1056,7 +1088,10 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             }
         }
         ++total_files;
-        progress_total_size += f->size;
+        if (f->size == -1)
+            progress_total_size = -1;
+        else if (progress_total_size >= 0)
+            progress_total_size += f->size;
     }
     if (!ctx->send_full_metadata) {
         /* Send metadata summary */
@@ -1082,14 +1117,15 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             goto fail;
         for (struct ttt_file *f = file_list.start; f; f = f->next) {
             bool file_failed = false;
-            if (access(f->local_path, F_OK) != 0 && errno == ENOENT) {
+            file_number++;
+
+            if (!ttt_file_is_stdin(f) && access(f->local_path, F_OK) != 0 && errno == ENOENT) {
                 /* File existed when we walked the directories, but it's gone
                  * now. Report this as a non-fatal error. */
                 ttt_error(0, 0, "%s no longer exists, not sending it.", f->local_path);
                 num_file_failures++;
                 continue;
             }
-            file_number++;
 
             /* Send file f to the receiver. */
             if (ttt_send_file(ctx, sess, file_number, total_files,
@@ -1363,9 +1399,23 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 goto fail;
             }
 
-            if (S_ISREG(current_file_mode)) {
-                /* This is a regular file. Open its local pathname for
-                 * writing. */
+            if (ctx->output_file != NULL) {
+                /* Don't create a new file - we're writing everything to
+                 * one output file. */
+                current_file = ctx->output_file;
+            }
+            else if (S_ISREG(current_file_mode)) {
+                /* This is a regular file. */
+
+                /* Create the containing directory if it isn't already there */
+                if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
+                    int err = errno;
+                    ttt_error(0, err, "failed to create directory for %s", local_filename);
+                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for %s: %s", local_filename, strerror(err));
+                    goto fail;
+                }
+
+                /* Open a new file for writing. */
                 current_file = fopen(local_filename, "wb");
                 if (ttt_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
                     fclose(current_file);
@@ -1373,43 +1423,21 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     current_file = NULL;
                     errno = EPERM;
                 }
-                if (current_file == NULL && errno == ENOENT) {
-                    /* We failed to create the file because one or more of its
-                     * parent directories don't exist. Try to create the
-                     * directory structure prefixing local_filename... */
-                    if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
-                        int err = errno;
-                        ttt_error(0, err, "failed to create directory for %s", local_filename);
-                        ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for %s: %s", local_filename, strerror(err));
-                        goto fail;
-                    }
-
-                    /* ... and try to open the file again. If we fail again,
-                     * report the error to our user and just ignore the
-                     * file's data which the sender is going to send us
-                     * anyway. */
-                    current_file = fopen(local_filename, "wb");
-                    if (current_file == NULL) {
-                        ttt_error(0, errno, "skipping %s: failed to open for writing", local_filename);
-                    }
+                if (current_file == NULL) {
+                    ttt_error(0, errno, "skipping %s: failed to open for writing", local_filename);
                 }
             }
 #ifndef WINDOWS
             else if (S_ISFIFO(current_file_mode)) {
                 /* Create a FIFO, creating its containing directories if necessary. */
+                if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
+                    int err = errno;
+                    ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
+                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
+                    goto fail;
+                }
                 if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
-                    if (errno == ENOENT) {
-                        if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
-                            int err = errno;
-                            ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
-                            ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
-                            goto fail;
-                        }
-
-                        if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
-                            ttt_error(0, errno, "skipping fifo %s", local_filename);
-                        }
-                    }
+                    ttt_error(0, errno, "skipping fifo %s", local_filename);
                 }
             }
 #endif
@@ -1454,7 +1482,8 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     goto fail;
                 }
             }
-            total_bytes_remaining -= decoded.u.chunk.length;
+            if (total_bytes_remaining > 0)
+                total_bytes_remaining -= decoded.u.chunk.length;
             current_file_position += decoded.u.chunk.length;
             total_bytes_received += decoded.u.chunk.length;
         }
@@ -1470,7 +1499,12 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 goto fail;
             }
 
-            if (current_file != NULL) {
+            if (current_file != NULL && current_file == ctx->output_file) {
+                /* Do not close current_file, because we're writing all
+                 * files we receive to the same output file. */
+                current_file = NULL;
+            }
+            else if (current_file != NULL) {
                 /* Try to close the file and fatal error if we can't. */
                 if (fclose(current_file) == EOF) {
                     /* If we fail to write out a file locally, we treat this
@@ -1487,24 +1521,26 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             }
 
             if (decoded.u.err.code == 0) {
-                /* Sender reports that it sent the file successfully.
-                 * Set the file's mode and timestamp according to the metadata
-                 * message we received before the file data. */
+                if (ctx->output_file == NULL) {
+                    /* Sender reports that it sent the file successfully.
+                     * Set the file's mode and timestamp according to the
+                     * metadata message we received before the file data. */
 #ifdef WINDOWS
-                /* utime() can't set a directory's modification time on Windows */
-                if (!S_ISDIR(current_file_mode))
+                    /* utime() can't set a directory's modification time on Windows */
+                    if (!S_ISDIR(current_file_mode))
 #endif
-                {
-                    struct utimbuf timbuf;
-                    timbuf.actime = time(NULL);
-                    timbuf.modtime = current_file_mtime;
-                    if (utime(local_filename, &timbuf) < 0) {
-                        ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                    {
+                        struct utimbuf timbuf;
+                        timbuf.actime = time(NULL);
+                        timbuf.modtime = current_file_mtime;
+                        if (utime(local_filename, &timbuf) < 0) {
+                            ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                        }
                     }
-                }
 
-                if (ttt_chmod(local_filename, current_file_mode & 07777) < 0) {
-                    ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 07777, local_filename);
+                    if (ttt_chmod(local_filename, current_file_mode & 07777) < 0) {
+                        ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 07777, local_filename);
+                    }
                 }
             }
             else {
@@ -1512,11 +1548,14 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * to read from or open it. This is not a fatal error, but we
                  * report and remember it, and delete any partially-transferred
                  * file. */
-                unlink(local_filename);
+                if (ctx->output_file == NULL) {
+                    unlink(local_filename);
+                }
                 files_sender_failed++;
 
                 /* Don't expect the rest of this file */
-                total_bytes_remaining -= current_file_size - current_file_position;
+                if (total_bytes_remaining > 0)
+                    total_bytes_remaining -= current_file_size - current_file_position;
                 ttt_error(0, 0, "warning: sender skipped %s: %s", local_filename, decoded.u.err.message);
             }
 
@@ -1546,7 +1585,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             make_progress_report(ctx, 0, local_filename,
                     current_file_number, file_count, current_file_position,
                     current_file_size, total_bytes_received,
-                    total_bytes_received + total_bytes_remaining,
+                    total_bytes_remaining < 0 ? -1 : total_bytes_received + total_bytes_remaining,
                     files_sender_failed, 0);
         }
     } while (decoded.tag != TTT_MSG_FILE_SET_END);
@@ -1560,7 +1599,7 @@ end:
     *sender_failed_file_count = files_sender_failed;
     free(local_filename);
     free(ttt_filename);
-    if (current_file)
+    if (current_file && current_file != ctx->output_file)
         fclose(current_file);
     return return_value;
 
@@ -1726,6 +1765,8 @@ ttt_file_transfer_init(struct ttt_file_transfer *ctx, bool start_as_sender) {
     ctx->next_progress_report.tv_sec = 0;
     ctx->next_progress_report.tv_usec = 0;
 
+    ctx->output_file = NULL;
+
     ttt_file_transfer_set_progress_callback(ctx, default_progress_callback);
 }
 
@@ -1789,6 +1830,11 @@ ttt_file_transfer_set_request_to_send_callback(struct ttt_file_transfer *ctx, tt
 void
 ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value) {
     ctx->send_full_metadata = value;
+}
+
+void
+ttt_file_transfer_set_output_file(struct ttt_file_transfer *ctx, FILE *f) {
+    ctx->output_file = f;
 }
 
 void
