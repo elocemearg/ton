@@ -85,6 +85,13 @@
 
 struct ttt_discover_result {
     uint32_t magic;
+
+    /* Announcer chooses a random salt and uses that for the encryption of each
+     * announcement packet. The salt is included in plaintext in the packet.
+     * The same salt is then used with the passphrase to create the encryption
+     * key for the session. */
+    unsigned char salt[8];
+
     PORT invitation_port;
 };
 
@@ -187,7 +194,9 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
         payload_length = enc_payload_length;
     }
     else {
-        payload_length = ttt_aes_256_cbc_decrypt(enc_payload_start, enc_payload_length, payload, sizeof(payload), secret, secret_length);
+        payload_length = ttt_aes_256_cbc_decrypt(enc_payload_start,
+                enc_payload_length, payload, sizeof(payload), secret,
+                secret_length, result->salt);
         if (payload_length < 0) {
             if (verbose)
                 ttt_error(0, 0, "validate_datagram: announcement not encrypted with expected passphrase");
@@ -234,7 +243,8 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
 static int
 make_announce_datagram(char *dest, int dest_max, const char *secret,
-        size_t secret_length, int enc_type, PORT invitation_port) {
+        size_t secret_length, int enc_type, PORT invitation_port,
+        const unsigned char *salt8) {
     char plain[256];
     int plain_payload_length;
     int encrypted_payload_length;
@@ -263,7 +273,8 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
     else if (enc_type == TTT_ENC_AES_256_CBC) {
         encrypted_payload_length = ttt_aes_256_cbc_encrypt(plain,
                 plain_payload_length, dest + DISCOVER_RD_OFFSET_PAYLOAD,
-                dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length);
+                dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length,
+                salt8);
         if (encrypted_payload_length < 0) {
             ttt_error(0, 0, "make_announce_datagram: ttt_aes_256_cbc_encrypt() failed");
             return -1;
@@ -487,7 +498,7 @@ tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set) {
 int
 tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
-        PORT *invitation_port_r) {
+        PORT *invitation_port_r, unsigned char *salt, size_t *salt_len) {
     int rc;
     int discovered = 0;
 
@@ -534,6 +545,8 @@ tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
                     *invitation_port_r = result.invitation_port;
                     memcpy(peer_addr_r, &peer_addr, addr_len);
                     *peer_addr_length_r = addr_len;
+                    *salt_len = 8;
+                    memcpy(salt, result.salt, *salt_len);
                     discovered = 1;
                 }
                 if (opts->received_announcement_cb != NULL) {
@@ -635,6 +648,10 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     dactx->multicast_address_ipv6 = strdup(opts->multicast_address_ipv6);
     dactx->announce_port = opts->discover_port;
     dactx->announcement_round_seq = 0;
+
+    /* Think up a random salt to use with the encryption of announcement
+     * packets, and encryption of the resulting session */
+    ttt_set_random_bytes((char *) dactx->session_salt, sizeof(dactx->session_salt));
 
     /* To maximise the chance of our announcement reaching our peer, we want
      * to try a broadcast packet on every interface on which we can broadcast,
@@ -819,7 +836,7 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
 
         datagram_length = make_announce_datagram(datagram, sizeof(datagram),
                 opts->passphrase, opts->passphrase_length,
-                TTT_ENC_AES_256_CBC, invitation_port);
+                TTT_ENC_AES_256_CBC, invitation_port, dactx->session_salt);
         if (datagram_length < 0) {
             ttt_error(0, errno, "discover_announce: failed to build datagram");
             return -1;
@@ -1109,8 +1126,6 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv6, true);
     }
 
-    ttt_session_set_key(opts->passphrase, opts->passphrase_length);
-
     do {
         int max_receiver_fd, max_connector_fd, maxfd;
         struct timeval timeout, *timeoutp;
@@ -1153,10 +1168,15 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         }
 
         if (tttdlctx_fdset_contains_receivers(&dlctx, &readfds)) {
+            unsigned char salt[8];
+            size_t salt_len = sizeof(salt);
+            unsigned char key[TTT_KEY_SIZE];
+
             /* Listen until we receive a valid UDP datagram which was encrypted
              * with our secret. This datagram, when decrypted, tells us which
              * port to make a TCP connection to. */
-            rc = tttdlctx_receive(&dlctx, opts, &peer_addr, &peer_addr_len, &peer_invitation_port);
+            rc = tttdlctx_receive(&dlctx, opts, &peer_addr, &peer_addr_len,
+                    &peer_invitation_port, salt, &salt_len);
             if (rc != 0) {
                 ttt_error(0, 0, "tttdctx_receive failed.");
                 goto fail;
@@ -1166,7 +1186,11 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
              * the port it specified, by adding to our tttmcctx context. This
              * will deal with multiple outgoing non-blocking connections. */
             ttt_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
-            tttmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len);
+
+            ttt_passphrase_to_key(opts->passphrase, opts->passphrase_length,
+                    salt, salt_len, key, sizeof(key));
+
+            tttmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len, key);
         }
 
         if (tttmcctx_fdset_contains_sockets(&mcctx, &writefds) ||
@@ -1241,7 +1265,10 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     dactx_valid = true;
 
     /* Open our listening TCP socket on the invitation port. */
-    if (tttacctx_init(&acctx, NULL, NULL, opts->address_families, opts->listen_port, use_tls) < 0) {
+    if (tttacctx_init(&acctx, NULL, NULL, opts->address_families,
+                opts->listen_port, use_tls, opts->passphrase,
+                opts->passphrase_length, dactx.session_salt,
+                sizeof(dactx.session_salt)) < 0) {
         goto fail;
     }
     acctx_valid = true;
@@ -1260,12 +1287,6 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     if (opts->multicast_address_ipv6) {
         tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv6, true);
     }
-
-    /* Set the secret passphrase we're going to use for our session.
-     * This will be used in the TLS handshake we do with any incoming
-     * connection, and the other end of it should have the same passphrase.
-     */
-    ttt_session_set_key(opts->passphrase, opts->passphrase_length);
 
     if (opts->verbose) {
         if (invitation_port4)

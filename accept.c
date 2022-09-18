@@ -39,7 +39,8 @@ tttacctx_add_session(struct tttacctx *ctx, int new_socket, struct sockaddr *addr
         return NULL;
     }
 
-    rc = ttt_session_init(s, new_socket, addr, addr_len, ctx->use_tls, 1);
+    rc = ttt_session_init(s, new_socket, addr, addr_len, ctx->use_tls, true,
+            ctx->use_tls ? ctx->session_key : NULL);
     if (rc < 0) {
         free(s);
         return NULL;
@@ -161,7 +162,8 @@ fail:
 int
 tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
         const char *listen_addr6, int address_families,
-        unsigned short listen_port, bool use_tls) {
+        unsigned short listen_port, bool use_tls, const char *passphrase,
+        size_t passphrase_length, const unsigned char *salt, size_t salt_length) {
     struct sockaddr_storage addr;
     socklen_t addr_len;
 
@@ -188,6 +190,10 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
             goto fail;
         }
         ctx->listen_port6 = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
+    }
+
+    if (ttt_passphrase_to_key(passphrase, passphrase_length, salt, salt_length, ctx->session_key, sizeof(ctx->session_key)) < 0) {
+        goto fail;
     }
 
     return 0;
@@ -297,8 +303,8 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
                         if (s != NULL) {
                             /* Add this to both fdsets so that we try to
                              * handshake with this session below. */
-                            s->want_read = 1;
-                            s->want_write = 1;
+                            s->want_read = true;
+                            s->want_write = true;
                             FD_SET(s->sock, &readsockets);
                             FD_SET(s->sock, &writesockets);
                             ttt_make_socket_non_blocking(new_socket);

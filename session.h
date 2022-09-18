@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include <openssl/ssl.h>
 
+#include "encryption.h"
+
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing
  * only, the default will be encrypted when I've deciphered the OpenSSL docs. */
 struct ttt_session {
@@ -37,6 +39,10 @@ struct ttt_session {
     SSL *ssl;
     SSL_CTX *ssl_ctx;
 
+    /* Pre-shared key with which to encrypt and authenticate this session,
+     * derived from the passphrase and a salt. */
+    unsigned char session_key[TTT_KEY_SIZE];
+
     /* True if this socket was born by accepting a connection from a listening
      * socket, false if it connected out to something. */
     bool is_server;
@@ -44,8 +50,6 @@ struct ttt_session {
     /* The address of the peer on the other end of the socket. */
     struct sockaddr_storage addr;
     socklen_t addr_len;
-
-    /* Not here yet: SSL structures for encrypted connections. */
 
     /* Used only during connection setup */
     bool want_read, want_write, failed;
@@ -57,20 +61,13 @@ ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_
 
 int
 ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
-        socklen_t addr_len, bool use_tls, bool is_server);
-
-int
-ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
-        socklen_t addr_len, bool use_tls);
+        socklen_t addr_len, bool use_tls, bool is_server, const unsigned char *key);
 
 int
 ttt_session_handshake(struct ttt_session *s);
 
 void
 ttt_session_destroy(struct ttt_session *s);
-
-int
-ttt_session_set_key(const char *passphrase, size_t passphrase_length);
 
 void
 ttt_session_remove_from_list(struct ttt_session **list_start, struct ttt_session *target);

@@ -171,6 +171,17 @@ struct tttdactx {
      * number of times tttdactx_announce() has been called for this context.
      * This is passed to opts->received_announcement_cb(). */
     int announcement_round_seq;
+
+    /* Random salt to use for all announcement packets from this context.
+     * This is included in plaintext in the announcement packet. It is used
+     * along with the secret passphrase to derive the key to encrypt/decrypt
+     * the packet, which is also the key we'll use for the session created when
+     * someone connects on our TCP listening socket.
+     *
+     * We must use the same salt for all announcement packets, because when
+     * our TCP socket receives a connection, we don't know which announcement
+     * it's replying to. */
+    unsigned char session_salt[8];
 };
 
 /* Initialise a discover-announce context with the passphrase and other
@@ -225,6 +236,12 @@ tttdlctx_init(struct tttdlctx *ctx, struct ttt_discover_options *opts);
  * decrypted datagram is put in *invitation_port_r. Then we return 0 for
  * success.
  *
+ * The salt included in the announcement is copied to *salt, which must point
+ * to at least eight bytes. The number of salt bytes copied is placed in
+ * *salt_len. This salt should be combined with the passphrase using
+ * ttt_passphrase_to_key() to produce the pre-shared key we will use to
+ * encrypt the session.
+ *
  * Return 0 if there was nothing to receive.
  * Return 1 if we received a valid announcement. In this case the source
  *   address of the announcement is placed in *peer_addr_r and the length
@@ -235,7 +252,7 @@ tttdlctx_init(struct tttdlctx *ctx, struct ttt_discover_options *opts);
 int
 tttdlctx_receive(struct tttdlctx *ctx, struct ttt_discover_options *opts,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
-        PORT *invitation_port_r);
+        PORT *invitation_port_r, unsigned char *salt, size_t *salt_len);
 
 /* Add this discover-listen context's receiving socket(s), created upon the
  * initialisation of the tttdlctx, to the given fd_set using FD_SET().

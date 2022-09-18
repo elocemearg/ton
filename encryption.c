@@ -29,12 +29,13 @@ ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
 
 int
 ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len) {
+        size_t dest_max, const char *secret, size_t secret_len,
+        unsigned char *salt_ret /* pointer to 8 bytes */) {
     EVP_CIPHER_CTX *ctx = NULL;
     const EVP_CIPHER *cipher = NULL;
     const unsigned char *iv, *salt;
     const unsigned char *ciphertext;
-    unsigned char key[32];
+    unsigned char key[TTT_KEY_SIZE];
     unsigned char *dest_ptr;
     int ciphertext_len;
     int l;
@@ -46,6 +47,9 @@ ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
     }
     salt = (const unsigned char *) src;
     iv = (const unsigned char *) src + 8;
+
+    if (salt_ret != NULL)
+        memcpy(salt_ret, salt, 8);
 
     ciphertext = (const unsigned char *) src + 24;
     ciphertext_len = src_len - 24;
@@ -60,7 +64,7 @@ ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
         goto fail;
     }
 
-    /* Convert the passphrase into a 32-byte key */
+    /* Convert the passphrase into a key of TTT_KEY_SIZE bytes */
     if (ttt_passphrase_to_key(secret, secret_len, salt, 8, key, sizeof(key)) < 0) {
         goto fail;
     }
@@ -105,12 +109,13 @@ ttt_set_random_bytes(char *dest, size_t length) {
 
 int
 ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len) {
+        size_t dest_max, const char *secret, size_t secret_len,
+        const unsigned char *salt /* 8 bytes */) {
     EVP_CIPHER_CTX *ctx = NULL;
     const EVP_CIPHER *cipher = NULL;
-    unsigned char key[32], iv[16];
-    unsigned char salt[8];
+    unsigned char key[TTT_KEY_SIZE], iv[16];
     unsigned char *dest_ptr;
+    const size_t salt_len = 8;
     char err_buf[256];
     int rc = 0;
     int l;
@@ -127,13 +132,13 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
         goto fail;
     }
 
-    if (ttt_set_random_bytes((char *) salt, sizeof(salt)) || ttt_set_random_bytes((char *) iv, sizeof(iv))) {
+    if (ttt_set_random_bytes((char *) iv, sizeof(iv))) {
         ttt_error(0, 0, "ttt_aes_256_cbc_encrypt: RAND_bytes() failed");
         goto fail;
     }
 
-    /* Convert our passphrase into a 32-byte key */
-    if (ttt_passphrase_to_key(secret, secret_len, salt, sizeof(salt), key, sizeof(key)) < 0) {
+    /* Convert our passphrase into a key of TTT_KEY_SIZE bytes */
+    if (ttt_passphrase_to_key(secret, secret_len, salt, salt_len, key, sizeof(key)) < 0) {
         goto fail;
     }
 
@@ -145,7 +150,7 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     /* Check we have enough space for the salt, the initialisation vector,
      * and the maximum size the ciphertext could possibly be, which is the
      * plaintext length plus the maximum padding (1x block size = 16 bytes). */
-    if (dest_max < sizeof(salt) + sizeof(iv) + src_len + 16) {
+    if (dest_max < salt_len + sizeof(iv) + src_len + 16) {
         ttt_error(0, 0, "ttt_aes_256_cbc_encrypt(): dest_max (%zd) too small!", dest_max);
         goto fail;
     }
@@ -153,8 +158,8 @@ ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     /* Write the 8-byte salt followed by the 16-byte IV to dest, because the
      * decryption will need these. */
     dest_ptr = (unsigned char *) dest;
-    memcpy(dest_ptr, salt, sizeof(salt));
-    dest_ptr += sizeof(salt);
+    memcpy(dest_ptr, salt, salt_len);
+    dest_ptr += salt_len;
     memcpy(dest_ptr, iv, sizeof(iv));
     dest_ptr += sizeof(iv);
 

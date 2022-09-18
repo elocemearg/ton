@@ -21,10 +21,64 @@
 #include "utils.h"
 #include "encryption.h"
 
-/* One global pre-shared key, set with ttt_session_set_key.
- * It's a 256-bit key generated from a passphrase. */
-static unsigned char ttt_session_key[32];
-static const int ttt_session_key_length = 32;
+/* Mapping of SSL to session key */
+struct ttt_session_key {
+    SSL *ssl;
+    unsigned char session_key[TTT_KEY_SIZE];
+    struct ttt_session_key *next;
+};
+
+/* Global list of all SSL objects we've created, and the session key we
+ * should use for them. We need this because psk_client_cb and psk_server_cb
+ * don't have arbitrary pointer arguments for us to pass things in like the
+ * passphrase or salt, but they do have the SSL pointer passed in.
+ *
+ * When we create a ttt_session with an SSL session in it, we add an entry
+ * to the list associating the SSL session with the key. Then the psk_client_cb
+ * or psk_server_cb callback can look up the key.
+ *
+ * Note that these functions are not (yet) thread safe. */
+struct ttt_session_key *ttt_session_key_list = NULL;
+
+/* Add a new SSL -> key association to the global list. */
+static const struct ttt_session_key *
+ttt_set_session_key(SSL *ssl, const unsigned char *session_key) {
+    struct ttt_session_key *k = malloc(sizeof(struct ttt_session_key));
+    if (k == NULL)
+        return NULL;
+    memcpy(k->session_key, session_key, TTT_KEY_SIZE);
+    k->ssl = ssl;
+    k->next = ttt_session_key_list;
+    ttt_session_key_list = k;
+    return k;
+}
+
+/* Look up a key given the SSL pointer. */
+static const struct ttt_session_key *
+ttt_find_session_key(SSL *ssl) {
+    for (struct ttt_session_key *k = ttt_session_key_list; k; k = k->next) {
+        if (k->ssl == ssl)
+            return k;
+    }
+    return NULL;
+}
+
+/* Remove an entry from the global list of keys. */
+static void
+ttt_remove_session_key(SSL *ssl) {
+    struct ttt_session_key *prev = NULL;
+    for (struct ttt_session_key *cur = ttt_session_key_list; cur; cur = cur->next) {
+        if (cur->ssl == ssl) {
+            if (prev == NULL)
+                ttt_session_key_list = cur->next;
+            else
+                prev->next = cur->next;
+            free(cur);
+            return;
+        }
+        prev = cur;
+    }
+}
 
 static void
 show_ssl_errors(FILE *out) {
@@ -286,17 +340,24 @@ static unsigned int
 psk_client_cb(SSL *ssl, const char *hint,
         char *identity, unsigned int max_identity_len,
         unsigned char *psk, unsigned int max_psk_len) {
+    const struct ttt_session_key *key = ttt_find_session_key(ssl);
+
+    if (key == NULL) {
+        ttt_error(0, 0, "psk_client_cb: internal error: no key set for SSL %p", ssl);
+        return 0;
+    }
+
     /* We don't use this */
     strncpy(identity, "tttclient", max_identity_len);
     if (max_identity_len > 0)
         identity[max_identity_len - 1] = '\0';
 
-    if (ttt_session_key_length > max_psk_len) {
+    if (TTT_KEY_SIZE > max_psk_len) {
         ttt_error(0, 0, "psk_client_cb: psk buffer not big enough!");
         return 0;
     }
-    memcpy(psk, ttt_session_key, ttt_session_key_length);
-    return ttt_session_key_length;
+    memcpy(psk, key->session_key, TTT_KEY_SIZE);
+    return TTT_KEY_SIZE;
 }
 
 /*
@@ -310,12 +371,19 @@ ssl_trace(int write_p, int version, int content_type, const void *buf, size_t le
 
 static unsigned int
 psk_server_cb(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len) {
-    if (ttt_session_key_length > max_psk_len) {
+    const struct ttt_session_key *key = ttt_find_session_key(ssl);
+
+    if (key == NULL) {
+        ttt_error(0, 0, "psk_server_cb: internal error: no key set for SSL %p", ssl);
+        return 0;
+    }
+
+    if (TTT_KEY_SIZE > max_psk_len) {
         ttt_error(0, 0, "psk_server_cb: psk buffer not big enough!");
         return 0;
     }
-    memcpy(psk, ttt_session_key, ttt_session_key_length);
-    return ttt_session_key_length;
+    memcpy(psk, key->session_key, TTT_KEY_SIZE);
+    return TTT_KEY_SIZE;
 }
 
 static int
@@ -360,6 +428,10 @@ ttt_session_tls_init(struct ttt_session *s) {
     s->ssl = SSL_new(s->ssl_ctx);
     SSL_set_fd(s->ssl, s->sock);
 
+    /* Add the mapping (s->ssl -> (session key)) to the global list, so
+     * that the callbacks psk_server_cb and psk_client_cb can find it. */
+    ttt_set_session_key(s->ssl, s->session_key);
+
     /* Set the appropriate state, ready to start the handshake */
     if (s->is_server) {
         SSL_set_accept_state(s->ssl);
@@ -373,7 +445,8 @@ ttt_session_tls_init(struct ttt_session *s) {
 
 int
 ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
-        socklen_t addr_len, bool use_tls, bool is_server) {
+        socklen_t addr_len, bool use_tls, bool is_server,
+        const unsigned char *key) {
     int rc;
 
     memset(s, 0, sizeof(*s));
@@ -387,43 +460,16 @@ ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
     s->is_server = is_server;
     s->next = NULL;
 
+    if (key) {
+        memcpy(s->session_key, key, TTT_KEY_SIZE);
+    }
+
     if (use_tls) {
         rc = ttt_session_tls_init(s);
     }
     else {
         rc = ttt_session_plain_init(s);
     }
-    return rc;
-}
-
-int
-ttt_session_connect(struct ttt_session *s, const struct sockaddr *addr,
-        socklen_t addr_len, bool use_tls) {
-    int sock = -1;
-    int rc = 0;
-
-    sock = socket(addr->sa_family, SOCK_STREAM, 0);
-    if (sock < 0) {
-        ttt_socket_error(0, "socket");
-        rc = -1;
-    }
-
-    if (rc == 0) {
-        rc = connect(sock, addr, addr_len);
-        if (rc != 0) {
-            ttt_socket_error(0, "connect");
-        }
-    }
-
-    if (rc == 0) {
-        rc = ttt_session_init(s, sock, addr, addr_len, use_tls, 0);
-    }
-
-    if (rc != 0) {
-        if (sock >= 0)
-            closesocket(sock);
-    }
-
     return rc;
 }
 
@@ -447,12 +493,10 @@ ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_
 
 void
 ttt_session_destroy(struct ttt_session *s) {
+    if (s->ssl) {
+        ttt_remove_session_key(s->ssl);
+    }
     s->destroy(s);
-}
-
-int
-ttt_session_set_key(const char *passphrase, size_t passphrase_len) {
-    return ttt_passphrase_to_key(passphrase, passphrase_len, NULL, 0, ttt_session_key, sizeof(ttt_session_key));
 }
 
 void

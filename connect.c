@@ -27,7 +27,8 @@ tttmcctx_free_session(struct tttmcctx *ctx, struct ttt_session *s) {
 }
 
 static struct ttt_session *
-tttmcctx_add_session(struct tttmcctx *ctx, int new_socket, struct sockaddr *addr, socklen_t addr_len) {
+tttmcctx_add_session(struct tttmcctx *ctx, int new_socket,
+        struct sockaddr *addr, socklen_t addr_len, const unsigned char *key) {
     struct ttt_session *s;
     int rc;
 
@@ -39,7 +40,7 @@ tttmcctx_add_session(struct tttmcctx *ctx, int new_socket, struct sockaddr *addr
     /* Initialise a TLS session, which when we do the handshake will take the
      * role of client. ttt_session doesn't need to know that new_socket hasn't
      * actually connected yet. */
-    rc = ttt_session_init(s, new_socket, addr, addr_len, true, false);
+    rc = ttt_session_init(s, new_socket, addr, addr_len, true, false, key);
     if (rc < 0) {
         free(s);
         return NULL;
@@ -135,23 +136,24 @@ tttmcctx_fdset_contains_sockets(struct tttmcctx *ctx, fd_set *set) {
     return count;
 }
 
-int
-tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr, socklen_t addr_len) {
+struct ttt_session *
+tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr,
+        socklen_t addr_len, const unsigned char *key) {
     int sock = -1;
     struct ttt_session *s;
 
     sock = make_async_connect_socket(addr, addr_len);
     if (sock < 0) {
-        return -1;
+        return NULL;
     }
 
-    s = tttmcctx_add_session(ctx, sock, addr, addr_len);
+    s = tttmcctx_add_session(ctx, sock, addr, addr_len, key);
     if (s == NULL) {
         close(sock);
-        return -1;
+        return NULL;
     }
 
-    return 0;
+    return s;
 }
 
 struct ttt_session *

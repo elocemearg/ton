@@ -64,12 +64,15 @@ tttmcctx_fdset_contains_sockets(struct tttmcctx *ctx, fd_set *set);
 /* Start a new outgoing connection attempt to the given socket address, and
  * add a new session to our list which uses this socket.
  *
- * Return 0 if the connection immediately succeeded without blocking (unlikely),
- * or if the connection is in progress.
- * Return -1 if we couldn't set up the session.
+ * key is a pointer to TTT_MAX_SIZE bytes, containing the pre-shared key to
+ * use with this session. This will be used in the TLS handshake.
+ *
+ * Return the new session if the connection is in progress, or if it
+ * immediately succeeded without blocking (unlikely).
+ * Return NULL if we couldn't set up the session.
  */
-int
-tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr, socklen_t addr_len);
+struct ttt_session *
+tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr, socklen_t addr_len, const unsigned char *key);
 
 /* For each socket in either of the sets writable_fds or exception_fds,
  * check to see whether the connection attempt has finished.
