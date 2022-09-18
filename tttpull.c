@@ -3,6 +3,7 @@
 #include <string.h>
 #include <getopt.h>
 #include <stdbool.h>
+#include <limits.h>
 
 #include "encryption.h"
 #include "utils.h"
@@ -57,16 +58,16 @@ static const struct option longopts[] = {
 static void
 print_help(FILE *f) {
     fprintf(f,
-"ttt pull: receive a file or set of files over TTT\n"
+"ttt pull: receive a set of files or directories over TTT\n"
 "\n"
 "Usage:\n"
-"    ttt pull [-o outputfileordir] [other options...]\n"
+"    ttt pull [-o outputdirectory] [other options...]\n"
 "Options:\n"
-"    -4, --ipv4               Do not use IPv4\n"
-"    -6, --ipv6               Do not use IPv6\n"
-"    --announcement-interval <ms>\n"
-"                             Discovery broadcast interval (ms) (default 1000)\n"
-"    --broadcast              Do not announce to broadcast addresses\n"
+"    -4, --ipv4               Use IPv4 only, not IPv6\n"
+"    -6, --ipv6               Use IPv6 only, not IPv4\n"
+"    --announcement-interval <sec>\n"
+"                             Discovery announcement interval (sec) (default 1.0)\n"
+"    --broadcast              Only announce to broadcast addresses, not multicast\n"
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               pusher must use the same)\n"
 "    -h, --help               Show this help\n"
@@ -75,7 +76,7 @@ print_help(FILE *f) {
 "                               private addresses\n"
 "    --max-announcements <n>  Give up after <n> discovery announcements\n"
 "                               (default 0, continue indefinitely)\n"
-"    --multicast              Do not announce to multicast addresses\n"
+"    --multicast              Only announce to multicast addresses, not broadcast\n"
 "    --multicast-address-ipv4 <a>\n"
 "                             Announce to IPv4 multicast address <a> (default\n"
 "                               %s, pusher must use the same)\n"
@@ -180,7 +181,7 @@ main_pull(int argc, char **argv) {
     int c;
     int verbose = 0;
     int max_announcements = 0;
-    int announcement_interval_ms = 1000;
+    double announcement_interval_sec = 1.0;
     int discover_port = -1;
     int listen_port = -1;
     int multicast_ttl = 0; // use default (1 for IPv4, route default for IPv6)
@@ -209,9 +210,14 @@ main_pull(int argc, char **argv) {
                 break;
 
             case PULL_ANNOUNCEMENT_INTERVAL:
-                announcement_interval_ms = atoi(optarg);
-                if (announcement_interval_ms < 50) {
-                    ttt_error(1, 0, "--announcement-interval: interval must be at least 50ms");
+                announcement_interval_sec = parse_double_or_exit(optarg, "--announcement-interval");
+                if (announcement_interval_sec < 0.1) {
+                    ttt_error(1, 0, "--announcement-interval: interval must be at least 0.1 seconds");
+                }
+                /* We will need to convert this to milliseconds and pass it
+                 * as an int... */
+                if (announcement_interval_sec > INT_MAX / 1000) {
+                    ttt_error(1, 0, "--announcement-interval: value is too large (max is %d)", INT_MAX / 1000);
                 }
                 break;
 
@@ -327,7 +333,7 @@ main_pull(int argc, char **argv) {
         ttt_discover_set_discover_port(&opts, discover_port);
     if (listen_port >= 0)
         ttt_discover_set_listen_port(&opts, listen_port);
-    ttt_discover_set_announcements(&opts, max_announcements, announcement_interval_ms);
+    ttt_discover_set_announcements(&opts, max_announcements, (int) (1000 * announcement_interval_sec));
     ttt_discover_set_multicast_ttl(&opts, multicast_ttl);
     ttt_discover_set_verbose(&opts, verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);

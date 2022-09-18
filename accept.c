@@ -197,22 +197,6 @@ fail:
     return -1;
 }
 
-/* If b > a, put (0, 0) in result.
- * Otherwise, set result to a - b. */
-static void
-timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *result) {
-    result->tv_sec = a->tv_sec - b->tv_sec;
-    result->tv_usec = a->tv_usec - b->tv_usec;
-    while (result->tv_usec < 0) {
-        result->tv_usec += 1000000;
-        result->tv_sec--;
-    }
-    if (result->tv_sec < 0) {
-        result->tv_sec = 0;
-        result->tv_usec = 0;
-    }
-}
-
 unsigned short
 tttacctx_get_listen_port(struct tttacctx *ctx, int address_family) {
     switch (address_family) {

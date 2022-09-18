@@ -10,6 +10,7 @@
 
 #include "filetransfer.h"
 #include "netif.h"
+#include "utils.h"
 
 #define CALL_TEST_REG_FN(fn) { \
     CU_ErrorCode rc = fn(); \
@@ -28,6 +29,7 @@ int main_test(int argc, char **argv) {
 
     CALL_TEST_REG_FN(ttt_filetransfer_register_tests);
     CALL_TEST_REG_FN(ttt_netif_register_tests);
+    CALL_TEST_REG_FN(ttt_utils_register_tests);
 
     rc = CU_basic_run_tests();
 

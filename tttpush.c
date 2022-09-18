@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <limits.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -33,6 +34,7 @@ enum main_push_longopts {
     PUSH_INCLUDE_GLOBAL,
     PUSH_PROMPT_PASSPHRASE,
     PUSH_HIDE_PASSPHRASE,
+    PUSH_TIMEOUT,
 };
 
 static const struct option longopts[] = {
@@ -47,6 +49,7 @@ static const struct option longopts[] = {
     { "words", 1, NULL, 'w' },
     { "prompt-passphrase", 0, NULL, PUSH_PROMPT_PASSPHRASE },
     { "hide-passphrase", 0, NULL, PUSH_HIDE_PASSPHRASE },
+    { "timeout", 1, NULL, PUSH_TIMEOUT },
     { "help", 0, NULL, 'h' },
     { "verbose", 0, NULL, 'v' },
 
@@ -56,16 +59,16 @@ static const struct option longopts[] = {
 static void
 print_help(FILE *f) {
     fprintf(f,
-"ttt push: send a file or set of files over TTT\n"
+"ttt push: send a set of files or directories over TTT\n"
 "\n"
 "Usage:\n"
 "    ttt push [options] files...\n"
 "Options:\n"
-"    -4, --ipv4               Use IPv4 and not IPv6\n"
-"    -6, --ipv6               Use IPv6 and not IPv4\n"
+"    -4, --ipv4               Use IPv4 only, not IPv6\n"
+"    -6, --ipv6               Use IPv6 only, not IPv4\n"
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               puller must use the same)\n"
-"    --help                   Show this help\n"
+"    -h, --help               Show this help\n"
 "    --hide-passphrase        Don't show passphrase as you type at the prompt\n"
 "    --include-global         Listen for announcements on global as well as\n"
 "                               private IP addresses\n"
@@ -74,10 +77,11 @@ print_help(FILE *f) {
 "                               %s, puller must use the same)\n"
 "    --multicast-address-ipv6 <a>\n"
 "                             Specify discovery IPv6 multicast address (default\n"
-"                               %s, puller must use the same)\n"
+"                               %s)\n"
 "    --passphrase <str>       Specify passphrase (default: auto-generate)\n"
 "    --prompt-passphrase      Prompt for passphrase rather than generating it\n"
 "    --send-full-metadata     Send full metadata to receiver before transfer\n"
+"    -t, --timeout <sec>      Time out if no connection established\n"
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
@@ -141,9 +145,10 @@ main_push(int argc, char **argv) {
     bool include_global = 0;
     bool prompt_for_passphrase = 0;
     bool hide_passphrase = 0;
+    double connect_timeout_sec = 0;
     struct ttt_discover_options opts;
 
-    while ((c = getopt_long(argc, argv, "hvw:46", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hvt:w:46", longopts, NULL)) != -1) {
         switch (c) {
             case PUSH_PASSPHRASE:
                 passphrase = strdup(optarg);
@@ -196,6 +201,17 @@ main_push(int argc, char **argv) {
                 hide_passphrase = true;
                 break;
 
+            case 't':
+            case PUSH_TIMEOUT:
+                connect_timeout_sec = parse_double_or_exit(optarg, "--timeout");
+                if (connect_timeout_sec < 0) {
+                    ttt_error(1, 0, "--timeout: argument must not be negative");
+                }
+                if (connect_timeout_sec > INT_MAX / 1000) {
+                    ttt_error(1, 0, "--timeout: value is too large (max is %d)", INT_MAX / 1000);
+                }
+                break;
+
             case 'h':
                 print_help(stdout);
                 exit(0);
@@ -211,7 +227,7 @@ main_push(int argc, char **argv) {
     }
 
     if (optind >= argc) {
-        print_help(stderr);
+        fprintf(stderr, "Usage is:\n    ttt push [options] <filename> ...\nUse -h for help.\n");
         exit(1);
     }
 
@@ -268,6 +284,7 @@ main_push(int argc, char **argv) {
     ttt_discover_set_received_announcement_callback(&opts,
             received_announcement_callback, &verbose);
     ttt_discover_set_include_global_addresses(&opts, include_global);
+    ttt_discover_set_connect_timeout(&opts, (int)(connect_timeout_sec * 1000));
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */

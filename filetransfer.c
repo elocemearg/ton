@@ -45,9 +45,6 @@ static int ttt_random_file_open_failures = 0;
 static int ttt_random_file_read_failures = 0;
 static int ttt_random_file_write_failures = 0;
 
-/* Return 1 if struct timeval X is later than struct timeval Y */
-#define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
-
 /* Join two path fragments together, inserting DIR_SEP between them if there
  * is no DIR_SEP at the end of path1 nor the start of path2. Write the joined
  * path to dest.
@@ -821,15 +818,6 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
             ttt_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
             return TTT_ERR_PROTOCOL;
     }
-}
-
-/* Add two struct timevals and put the result in *dest. */
-static void
-timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *dest) {
-    dest->tv_sec = t1->tv_sec + t2->tv_sec;
-    dest->tv_usec = t1->tv_usec + t2->tv_usec;
-    dest->tv_sec += dest->tv_usec / 1000000;
-    dest->tv_usec %= 1000000;
 }
 
 /* Call the progress report callback in ctx and update
@@ -2032,50 +2020,12 @@ test_ttt_path_to_local_path(void) {
     }
 }
 
-void
-test_timeval_add(void) {
-    struct {
-        struct timeval t1;
-        struct timeval t2;
-        struct timeval expected;
-    } test_cases[] = {
-        { { 0, 0 }, { 0, 0 }, { 0, 0 } },
-        { { 5, 400000 }, { 6, 700000 }, { 12, 100000 } },
-        { { 1663420372, 900000 }, { 0, 500000 }, { 1663420373, 400000 } },
-        { { 1663420372, 500000 }, { 0, 500000 }, { 1663420373, 0 } },
-        { { 1663420372, 400000 }, { 0, 500000 }, { 1663420372, 900000 } },
-        { { 1663420372, 600000 }, { 0, 10500000 }, { 1663420383, 100000 } },
-        { { 1663420372, 999999 }, { 0, 1 }, { 1663420373, 0 } },
-        { { 1663420372, 123456 }, { 0, 0 }, { 1663420372, 123456 } }
-    };
-
-    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        struct timeval observed;
-        struct timeval *t1 = &test_cases[i].t1;
-        struct timeval *t2 = &test_cases[i].t2;
-        struct timeval *expected = &test_cases[i].expected;
-
-        timeval_add(t1, t2, &observed);
-
-        if (expected->tv_sec != observed.tv_sec || expected->tv_usec != observed.tv_usec) {
-            fprintf(stderr, "test_timeval_add: t1 (%d, %d), t2 (%d, %d), expected (%d, %d), observed (%d, %d)\n",
-                    (int) t1->tv_sec, (int) t1->tv_usec,
-                    (int) t2->tv_sec, (int) t2->tv_usec,
-                    (int) expected->tv_sec, (int) expected->tv_usec,
-                    (int) observed.tv_sec, (int) observed.tv_usec);
-        }
-        CU_ASSERT_EQUAL(observed.tv_sec, expected->tv_sec);
-        CU_ASSERT_EQUAL(observed.tv_usec, expected->tv_usec);
-    }
-}
-
 CU_ErrorCode
 ttt_filetransfer_register_tests(void) {
     CU_TestInfo tests[] = {
         { "join_paths", test_join_paths },
         { "local_path_to_ttt_path", test_local_path_to_ttt_path },
         { "ttt_path_to_local_path", test_ttt_path_to_local_path },
-        { "timeval_add", test_timeval_add },
         CU_TEST_INFO_NULL
     };
 

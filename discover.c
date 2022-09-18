@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include <sys/types.h>
+#include <sys/time.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -1032,6 +1033,11 @@ void
 ttt_discover_set_announcements(struct ttt_discover_options *opts,
         int max_announcements, int announcement_interval_ms) {
     opts->max_announcements = max_announcements;
+
+    /* Don't make announcement rounds more than once every 0.1 seconds. */
+    if (announcement_interval_ms < 100)
+        announcement_interval_ms = 100;
+
     opts->announcement_interval_ms = announcement_interval_ms;
 }
 
@@ -1043,6 +1049,11 @@ ttt_discover_set_multicast_ttl(struct ttt_discover_options *opts, int ttl) {
 void
 ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, bool include_global) {
     opts->include_global_addresses = include_global;
+}
+
+void
+ttt_discover_set_connect_timeout(struct ttt_discover_options *opts, int timeout_ms) {
+    opts->discover_connect_timeout_ms = timeout_ms;
 }
 
 void
@@ -1063,6 +1074,8 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
     int peer_addr_len = sizeof(peer_addr);
     PORT peer_invitation_port;
     int handshake_completed = 0;
+    struct timeval start_time, end_time;
+    bool timeout_set = false;
     int rc;
 
     /* Initialise a discovery listen context */
@@ -1072,6 +1085,15 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         return -1;
     }
     ctx_valid = true;
+
+    gettimeofday(&start_time, NULL);
+    if (opts->discover_connect_timeout_ms > 0) {
+        struct timeval timeout;
+        timeout.tv_sec = opts->discover_connect_timeout_ms / 1000;
+        timeout.tv_usec = (opts->discover_connect_timeout_ms % 1000) * 1000;
+        timeval_add(&start_time, &timeout, &end_time);
+        timeout_set = true;
+    }
 
     /* Initialise a multi-connect context, which is a glorified list of
      * partially-set-up non-blocking outgoing connection attempts. */
@@ -1091,6 +1113,7 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
 
     do {
         int max_receiver_fd, max_connector_fd, maxfd;
+        struct timeval timeout, *timeoutp;
         fd_set readfds, writefds, exceptfds;
 
         FD_ZERO(&readfds);
@@ -1106,10 +1129,27 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         else
             maxfd = max_connector_fd;
 
+        if (timeout_set) {
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            timeval_diff(&end_time, &now, &timeout);
+            timeoutp = &timeout;
+        }
+        else {
+            timeoutp = NULL;
+        }
+
         /* Wait for any new announcements (readfds) or any outgoing connection
          * attempts which have finished (writefds/exceptfds). */
-        if (select(maxfd + 1, &readfds, &writefds, &exceptfds, NULL) < 0) {
+        if ((rc = select(maxfd + 1, &readfds, &writefds, &exceptfds, timeoutp)) < 0) {
             ttt_error(0, 0, "select");
+        }
+
+        if (rc == 0) {
+            /* Timed out waiting for a valid announcement or waiting to make
+             * a successful connection. */
+            ttt_error(0, 0, "timed out");
+            goto fail;
         }
 
         if (tttdlctx_fdset_contains_receivers(&dlctx, &readfds)) {

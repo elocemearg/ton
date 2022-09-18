@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -169,6 +170,32 @@ ttt_vfalloc(const char *fmt, va_list ap) {
     return buf;
 }
 
+/* Add two struct timevals and put the result in *dest. */
+void
+timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *dest) {
+    dest->tv_sec = t1->tv_sec + t2->tv_sec;
+    dest->tv_usec = t1->tv_usec + t2->tv_usec;
+    dest->tv_sec += dest->tv_usec / 1000000;
+    dest->tv_usec %= 1000000;
+}
+
+
+/* If b > a, put (0, 0) in result.
+ * Otherwise, set result to a - b. */
+void
+timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *result) {
+    result->tv_sec = a->tv_sec - b->tv_sec;
+    result->tv_usec = a->tv_usec - b->tv_usec;
+    while (result->tv_usec < 0) {
+        result->tv_usec += 1000000;
+        result->tv_sec--;
+    }
+    if (result->tv_sec < 0) {
+        result->tv_sec = 0;
+        result->tv_usec = 0;
+    }
+}
+
 static int
 ttt_mkdir(const char *pathname, int mode) {
 #ifdef WINDOWS
@@ -265,6 +292,23 @@ ttt_size_to_str(long long size, char *dest) {
     }
 }
 
+double
+parse_double_or_exit(const char *str, const char *option) {
+    char *endptr = NULL;
+    double d = strtod(str, &endptr);
+    if (*str && endptr != NULL && *endptr == '\0') {
+        if (!isnormal(d)) {
+            ttt_error(1, 0, "%s: argument %s is out of range", option, str);
+        }
+        return d;
+    }
+    else {
+        ttt_error(1, 0, "%s: argument %s is not a number", option, str);
+        return 0;
+    }
+}
+
+
 #ifdef WINDOWS
 int
 ttt_chmod(const char *path, int unix_mode) {
@@ -348,4 +392,105 @@ ttt_make_socket_non_blocking(int sock) {
         return -1;
     return 0;
 }
+#endif
+
+/*****************************************************************************/
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+void
+test_timeval_add(void) {
+    struct {
+        struct timeval t1;
+        struct timeval t2;
+        struct timeval expected;
+    } test_cases[] = {
+        { { 0, 0 }, { 0, 0 }, { 0, 0 } },
+        { { 5, 400000 }, { 6, 700000 }, { 12, 100000 } },
+        { { 1663420372, 900000 }, { 0, 500000 }, { 1663420373, 400000 } },
+        { { 1663420372, 500000 }, { 0, 500000 }, { 1663420373, 0 } },
+        { { 1663420372, 400000 }, { 0, 500000 }, { 1663420372, 900000 } },
+        { { 1663420372, 600000 }, { 0, 10500000 }, { 1663420383, 100000 } },
+        { { 1663420372, 999999 }, { 0, 1 }, { 1663420373, 0 } },
+        { { 1663420372, 123456 }, { 0, 0 }, { 1663420372, 123456 } }
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        struct timeval observed;
+        struct timeval *t1 = &test_cases[i].t1;
+        struct timeval *t2 = &test_cases[i].t2;
+        struct timeval *expected = &test_cases[i].expected;
+
+        timeval_add(t1, t2, &observed);
+
+        if (expected->tv_sec != observed.tv_sec || expected->tv_usec != observed.tv_usec) {
+            fprintf(stderr, "test_timeval_add: t1 (%d, %d), t2 (%d, %d), expected (%d, %d), observed (%d, %d)\n",
+                    (int) t1->tv_sec, (int) t1->tv_usec,
+                    (int) t2->tv_sec, (int) t2->tv_usec,
+                    (int) expected->tv_sec, (int) expected->tv_usec,
+                    (int) observed.tv_sec, (int) observed.tv_usec);
+        }
+        CU_ASSERT_EQUAL(observed.tv_sec, expected->tv_sec);
+        CU_ASSERT_EQUAL(observed.tv_usec, expected->tv_usec);
+    }
+}
+
+void
+test_timeval_diff(void) {
+    struct {
+        struct timeval t1;
+        struct timeval t2;
+        struct timeval expected;
+    } test_cases[] = {
+        /* If t1 < t2, result is expected to be 0 */
+        { { 0, 0 }, { 0, 0 }, { 0, 0 } },
+        { { 1663499680, 400000 }, { 1663499680, 300000 }, { 0, 100000 } },
+        { { 1663499680, 400000 }, { 1663499680, 500000 }, { 0, 0 } },
+        { { 1663499680, 900000 }, { 1663499681, 100000 }, { 0, 0 } },
+        { { 1663499680, 100000 }, { 1663499679, 900000 }, { 0, 200000 } },
+        { { 1663499680, 200000 }, { 1663499000, 300000 }, { 679, 900000 } },
+        { { 1663499680, 500000 }, { 1663500000, 0 }, { 0, 0 } },
+        { { 1663499680, 246802 }, { 0, 0 }, { 1663499680, 246802 } },
+        { { 1672531200, 654321 }, { 1640995200, 123456 }, { 31536000, 530865 }},
+        { { 1672531200, 123456 }, { 1640995200, 654321 }, { 31535999, 469135 }},
+    };
+
+    for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+        struct timeval observed;
+        struct timeval *t1 = &test_cases[i].t1;
+        struct timeval *t2 = &test_cases[i].t2;
+        struct timeval *expected = &test_cases[i].expected;
+
+        timeval_diff(t1, t2, &observed);
+
+        if (expected->tv_sec != observed.tv_sec || expected->tv_usec != observed.tv_usec) {
+            fprintf(stderr, "test_timeval_diff: t1 (%d, %d), t2 (%d, %d), expected (%d, %d), observed (%d, %d)\n",
+                    (int) t1->tv_sec, (int) t1->tv_usec,
+                    (int) t2->tv_sec, (int) t2->tv_usec,
+                    (int) expected->tv_sec, (int) expected->tv_usec,
+                    (int) observed.tv_sec, (int) observed.tv_usec);
+        }
+        CU_ASSERT_EQUAL(observed.tv_sec, expected->tv_sec);
+        CU_ASSERT_EQUAL(observed.tv_usec, expected->tv_usec);
+    }
+}
+
+CU_ErrorCode
+ttt_utils_register_tests(void) {
+    CU_TestInfo tests[] = {
+        { "timeval_add", test_timeval_add },
+        { "timeval_diff", test_timeval_diff },
+        CU_TEST_INFO_NULL
+    };
+
+    CU_SuiteInfo suites[] = {
+        { "utils", NULL, NULL, NULL, NULL, tests },
+        CU_SUITE_INFO_NULL
+    };
+
+    return CU_register_suites(suites);
+}
+
 #endif

@@ -111,6 +111,12 @@ struct ttt_discover_options {
     /* Whether to include non-private IP addresses when selecting the network
      * interfaces to send announcements from. */
     bool include_global_addresses;
+
+    /* Timeout, in milliseconds, for ttt_discover_and_connect() to receive a
+     * valid announcement datagram and establish a session to the other host.
+     * ttt_discover_and_connect() will fail if a session is not established
+     * in that time. The default is 0, which disables the timeout. */
+    int discover_connect_timeout_ms;
 };
 
 /* TTT discovery listen context */
@@ -357,6 +363,13 @@ ttt_discover_set_multicast_ttl(struct ttt_discover_options *opts, int ttl);
  * interfaces to send announcements from. Default is false. */
 void
 ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, bool include_global);
+
+/* Set a timeout, in milliseconds, on ttt_discover_and_connect(). If it takes
+ * longer than this to receive a valid announcement datagram and connect to
+ * the other host, ttt_discover_and_connect() fails. The default is 0, which
+ * disables this timeout. */
+void
+ttt_discover_set_connect_timeout(struct ttt_discover_options *opts, int timeout_ms);
 
 /* Convenience function to discover the other host on our network which has
  * our passphrase, and make a TCP connection to them, returning that in

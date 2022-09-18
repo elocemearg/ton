@@ -38,6 +38,10 @@
 #define PRINTF_INT64 "ll"
 #endif
 
+/* Useful struct timeval wrangler */
+/* Return 1 if struct timeval X is later than struct timeval Y */
+#define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
+
 #ifdef WINDOWS
 typedef struct __stat64 STAT;
 #define ttt_stat _stat64
@@ -83,6 +87,20 @@ ttt_socket_error(int exit_status, const char *format, ...);
 char *
 ttt_vfalloc(const char *fmt, va_list ap);
 
+/* Add the timevals *t1 and *t2 and place the result in *dest. *dest will be
+ * normalised so that dest->tv_usec is in the range [0, 999999]. */
+void
+timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *dest);
+
+/* Calculate the time difference between two timevals where *a > *b.
+ * If the time described by *a is earlier than that described by *b, set
+ * *result to (0, 0). Otherwise, set *result to the difference between the
+ * two times.
+ * This is effectively MAX(0, *a - *b).
+ */
+void
+timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *result);
+
 /* Create the directory named in "path" and give it the permission bits "mode".
  * If parents_only is set, ignore the last component of "path".
  * dir_sep is the directory separator according to the local OS.
@@ -100,6 +118,13 @@ ttt_mkdir_parents(const char *path, int mode, bool parents_only, char dir_sep);
  */
 void
 ttt_size_to_str(long long size, char *dest);
+
+/* Parse str as a double using strtod, and exit with an error message if it
+ * fails to parse as a number or is a NaN or infinity. This is used by
+ * tttpush.c and tttpull.c to parse command line options. "option" is the
+ * relevant option name, which is included in the error message. */
+double
+parse_double_or_exit(const char *str, const char *option);
 
 /* (best-effort) platform-independent chmod(). */
 #ifdef WINDOWS
@@ -127,5 +152,16 @@ ttt_make_socket_blocking(int sock);
 /* Cross-platform function to make a socket non-blocking. */
 int
 ttt_make_socket_non_blocking(int sock);
+
+
+#ifdef TTT_UNIT_TESTS
+
+#include <CUnit/CUnit.h>
+
+/* Used by ttt test. */
+CU_ErrorCode
+ttt_utils_register_tests(void);
+
+#endif
 
 #endif
