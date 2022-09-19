@@ -9,6 +9,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <errno.h>
+
+#include "utils.h"
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -19,10 +22,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #endif
-
-#include <errno.h>
-
-#include "utils.h"
 
 void
 ttt_dump_hex(const void *data, size_t length, const char *context) {
@@ -196,86 +195,6 @@ timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *r
     }
 }
 
-static int
-ttt_mkdir(const char *pathname, int mode) {
-#ifdef WINDOWS
-    return mkdir(pathname);
-#else
-    return mkdir(pathname, mode);
-#endif
-}
-
-int
-ttt_mkdir_parents(const char *pathname_orig, int mode, bool parents_only, char dir_sep) {
-    size_t pathname_len;
-    char *pathname = strdup(pathname_orig);
-    char *last_dir_sep = NULL;
-    int return_value = 0;
-    STAT st;
-
-    if (pathname == NULL)
-        return -1;
-
-    /* Remove any trailing directory separators from pathname */
-    pathname_len = strlen(pathname);
-    while (pathname_len > 0 && pathname[pathname_len - 1] == dir_sep)
-        pathname[--pathname_len] = '\0';
-
-    /* First, check if this path, (or its parent if parents_only is set),
-     * already exists as a directory. If so, there's nothing to do and we
-     * don't need to check each component in turn. */
-    if (parents_only) {
-        last_dir_sep = strrchr(pathname, dir_sep);
-        if (last_dir_sep) {
-            *last_dir_sep = '\0';
-        }
-    }
-    if (ttt_stat(pathname, &st) == 0 && S_ISDIR(st.st_mode)) {
-        /* deepest level directory we would create already exists */
-        free(pathname);
-        return 0;
-    }
-    /* Undo our vandalism of the pathname and carry on... */
-    if (last_dir_sep)
-        *last_dir_sep = dir_sep;
-
-    /* For every sub-path that's a prefix of this one, check if the directory
-     * exists and create it if it doesn't.
-     * Note we also iterate round the loop when pos == pathname_len, so that
-     * we create the last level directory as well if parents_only is not set.
-     * Start at pos = 1 so that if pathname is an absolute path e.g.
-     * /tmp/dest/a.txt we don't try to create "/" */
-    for (size_t pos = 1; pos <= pathname_len; pos++) {
-        if (pathname[pos] == dir_sep || (!parents_only && pathname[pos] == '\0')) {
-            /* Does pathname[0 to pos] exist as a directory? */
-            pathname[pos] = '\0';
-            if (ttt_stat(pathname, &st) < 0 && errno == ENOENT) {
-                /* Doesn't exist - create it. */
-                if (ttt_mkdir(pathname, mode) < 0) {
-                    goto fail;
-                }
-            }
-            else if (!S_ISDIR(st.st_mode)) {
-                /* Exists but not as a directory */
-                errno = ENOTDIR;
-                goto fail;
-            }
-            /* Otherwise, this directory already exists. Put the directory
-             * separator back if we replaced it, and continue. */
-            if (pos < pathname_len) {
-                pathname[pos] = dir_sep;
-            }
-        }
-    }
-end:
-    free(pathname);
-    return return_value;
-
-fail:
-    return_value = -1;
-    goto end;
-}
-
 /* Convert "size", which is a size in bytes, into a human-readable string
  * such as "4.32MB" and write it to dest.
  * dest must point to a buffer of at least 7 bytes. */
@@ -327,29 +246,6 @@ parse_double_or_exit(const char *str, const char *option) {
     }
 }
 
-
-#ifdef WINDOWS
-int
-ttt_chmod(const char *path, int unix_mode) {
-    /* Translate the Unix-style chmod mode bits into what's required by the
-     * Windows _chmod call, which only supports one read and write bit.
-     * Take those from the owner-readable and owner-writable bits of
-     * unix_mode. */
-    int windows_mode_bits = 0;
-    if (unix_mode & 0400) {
-        windows_mode_bits |= _S_IREAD;
-    }
-    if (unix_mode & 0200) {
-        windows_mode_bits |= _S_IWRITE;
-    }
-    return _chmod(path, windows_mode_bits);
-}
-#else
-int
-ttt_chmod(const char *path, mode_t mode) {
-    return chmod(path, mode);
-}
-#endif
 
 #ifdef WINDOWS
 void

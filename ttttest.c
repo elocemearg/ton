@@ -30,6 +30,7 @@ int main_test(int argc, char **argv) {
     CALL_TEST_REG_FN(ttt_filetransfer_register_tests);
     CALL_TEST_REG_FN(ttt_netif_register_tests);
     CALL_TEST_REG_FN(ttt_utils_register_tests);
+    CALL_TEST_REG_FN(ttt_localfs_register_tests);
 
     rc = CU_basic_run_tests();
 

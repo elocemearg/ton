@@ -10,7 +10,7 @@ $GCC -Wall -DWINDOWS=1 -DTTT_UNIT_TESTS=1 -g -static \
     -I "$OPENSSL_INCLUDE" -I "$CUNIT_INCLUDE" \
     -o ttt.exe \
     ttt.c ttttest.c tttpush.c tttpull.c discover.c utils.c encryption.c \
-    netif.c session.c accept.c protocol.c filetransfer.c connect.c \
+    netif.c session.c accept.c protocol.c filetransfer.c connect.c localfs.c \
     generatedwordlist.c \
     -L"$OPENSSL_ROOT" -L"$CUNIT_ROOT" \
     -lcunit -lssl -lcrypto -liphlpapi -lws2_32

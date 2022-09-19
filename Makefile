@@ -12,12 +12,12 @@ endif
 ttt: ttt.c ttttest.c tttpush.c tttpull.c tttpush.h tttpull.h ttttest.h \
 	discover.c discover.h utils.c utils.h encryption.c encryption.h \
 	netif.c netif.h session.c session.h accept.c accept.h \
-	protocol.c protocol.h connect.c connect.h \
+	protocol.c protocol.h connect.c connect.h localfs.c localfs.h \
 	filetransfer.c filetransfer.h defaults.h generatedwordlist.c
 	gcc $(CFLAGS) -o ttt \
 		ttt.c ttttest.c tttpush.c tttpull.c discover.c utils.c encryption.c \
 		netif.c session.c accept.c protocol.c filetransfer.c connect.c \
-		generatedwordlist.c \
+		localfs.c generatedwordlist.c \
 		$(LDFLAGS)
 
 tttdiscovertest: tttdiscovertest.c discover.c discover.h \

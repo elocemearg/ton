@@ -4,10 +4,11 @@
 #include <sys/time.h>
 
 #include "session.h"
+#include "localfs.h"
 
 struct ttt_file {
     /* Source or destination path to the file on our system. */
-    char *local_path;
+    TTT_LF_CHAR *local_path;
 
     /* How the file is named in the TTT_MSG_FILE_METADATA message. This
      * will have all directory separators replaced with '/' no matter what
@@ -40,8 +41,8 @@ typedef int (*ttt_ft_request_to_send_cb)(void *callback_cookie,
         long long total_size);
 
 typedef void (*ttt_ft_progress_cb)(void *callback_cookie, int is_sender,
-            const char *filename, long file_number, long total_files,
-            long long file_position, long long file_size,
+            const TTT_LF_CHAR *filename, long file_number,
+            long total_files, long long file_position, long long file_size,
             long long bytes_so_far, long long total_bytes,
             long skipped_files, int finished);
 
@@ -65,11 +66,11 @@ struct ttt_file_transfer {
      * then if this is NULL we won't ask to switch roles after we've finished
      * sending, we'll just close the session. If start_as_sender is 0,
      * output_dir isn't allowed to be NULL. */
-    char *output_dir;
+    TTT_LF_CHAR *output_dir;
 
     /* The list of files or directories we want to send if and when we get
      * to be the sender on this session. */
-    char **source_paths;
+    TTT_LF_CHAR **source_paths;
 
     /* The number of strings in source_paths. */
     int num_source_paths;

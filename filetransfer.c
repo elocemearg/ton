@@ -18,27 +18,7 @@
 #include "session.h"
 #include "protocol.h"
 #include "utils.h"
-
-#ifdef NAME_MAX
-#define MAX_PATH_COMPONENT_LEN NAME_MAX
-#else
-#define MAX_PATH_COMPONENT_LEN 256
-#endif
-
-/* DIR_SEP_STR and DIR_SEP is the directory separator we have to use in
- * pathnames passed to OS calls. On Windows it's a backslash and on everything
- * else it's a slash.
- *
- * This is distinct from the directory separator we use in pathnames in
- * protocol messages we send such as TTT_MSG_FILE_METADATA. This is always
- * a slash.
- */
-#ifdef WINDOWS
-#define DIR_SEP_STR "\\"
-#else
-#define DIR_SEP_STR "/"
-#endif
-const char DIR_SEP = DIR_SEP_STR[0];
+#include "localfs.h"
 
 /* Enable random failures for testing */
 static int ttt_random_file_open_failures = 0;
@@ -48,11 +28,11 @@ static int ttt_random_file_write_failures = 0;
 /* Join two path fragments together, inserting DIR_SEP between them if there
  * is no DIR_SEP at the end of path1 nor the start of path2. Write the joined
  * path to dest.
- * dest must point to at least strlen(path1) + strlen(path2) + 2 bytes. */
+ * dest must point to at least (ttt_lf_len(path1) + ttt_lf_len(path2) + 2) * ttt_lf_char_size() bytes. */
 static void
-join_paths(const char *path1, const char *path2, char *dest) {
+join_paths(const TTT_LF_CHAR *path1, const TTT_LF_CHAR *path2, TTT_LF_CHAR *dest) {
     /* Decide whether we need to put a directory separator between these */
-    size_t path1_len = strlen(path1);
+    size_t path1_len = ttt_lf_len(path1);
     bool add_sep;
 
     if (path1[0] == '\0' || path2[0] == '\0') {
@@ -68,33 +48,33 @@ join_paths(const char *path1, const char *path2, char *dest) {
         }
     }
 
-    sprintf(dest, "%s%s%s", path1, add_sep ? DIR_SEP_STR : "", path2);
+    ttt_lf_copy(dest, path1);
+    if (add_sep)
+        ttt_lf_copy(dest + ttt_lf_len(dest), DIR_SEP_STR);
+    ttt_lf_copy(dest + ttt_lf_len(dest), path2);
 }
 
 #ifdef WINDOWS
 /* Windows only: determine whether a path ends with a given ending,
  * case-insensitively. */
 static int
-ends_with_icase(const char *path, const char *ending) {
-    size_t len = strlen(path);
-    if (len < strlen(ending))
+ends_with_icase(TTT_LF_CHAR *path, TTT_LF_CHAR *ending) {
+    size_t len = ttt_lf_len(path);
+    if (len < ttt_lf_len(ending))
         return 0;
-    if (!strcasecmp(path + len - strlen(ending), ending))
+    if (!ttt_lf_casecmp(path + len - ttt_lf_len(ending), ending))
         return 1;
     else
         return 0;
 }
 #endif
 
-static char *
-alloc_real_path_name(const char *path) {
-    char *real_path_name;
+static TTT_LF_CHAR *
+alloc_real_path_name(const TTT_LF_CHAR *path) {
+    TTT_LF_CHAR *real_path_name;
     size_t len;
-#ifdef WINDOWS
-    real_path_name = _fullpath(NULL, path, 0);
-#else
-    real_path_name = realpath(path, NULL);
-#endif
+
+    real_path_name = ttt_realpath(path);
     if (real_path_name == NULL)
         return NULL;
 
@@ -112,7 +92,7 @@ alloc_real_path_name(const char *path) {
      * relative path ("D:my\relative\path") because _fullpath() above has
      * given us an absolute path.
      */
-    len = strlen(real_path_name);
+    len = ttt_lf_len(real_path_name);
     while (len > 1 && real_path_name[len - 1] == DIR_SEP) {
 #ifdef WINDOWS
         if (real_path_name[len - 2] == ':')
@@ -125,14 +105,14 @@ alloc_real_path_name(const char *path) {
 
 
 static int
-ttt_dir_walk_aux(const char *path, int orig_path_start,
-        int (*callback)(void *cookie, const char *file_path, STAT *st,
-            int orig_path_start),
+ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
+        int (*callback)(void *cookie, TTT_LF_CHAR *file_path,
+            TTT_STAT *st, int orig_path_start),
         void *cookie) {
     int ret = 0;
-    STAT st;
+    TTT_STAT st;
     if (ttt_stat(path, &st) < 0) {
-        ttt_error(0, errno, "skipping %s: stat failed", path);
+        ttt_error(0, errno, "skipping " TTT_LF_PRINTF ": stat failed", path);
         return 1;
     }
 
@@ -143,32 +123,33 @@ ttt_dir_walk_aux(const char *path, int orig_path_start,
 
     if (S_ISDIR(st.st_mode)) {
         /* This is a directory. Recursively walk each of its children. */
-        char *new_path = NULL;
-        DIR *dir = opendir(path);
-        struct dirent *ent = NULL;
+        TTT_LF_CHAR *new_path = NULL;
+        TTT_DIR_HANDLE dir = ttt_opendir(path);
+        TTT_DIR_ENTRY ent = NULL;
         long num_entries_in_dir = 0;
         int subret;
 
         if (dir == NULL) {
-            ttt_error(0, errno, "skipping directory %s", path);
+            ttt_error(0, errno, "skipping directory " TTT_LF_PRINTF, path);
             return 1;
         }
 
-        new_path = malloc(strlen(path) + 1 + MAX_PATH_COMPONENT_LEN + 1);
+        new_path = malloc((ttt_lf_len(path) + 1 + MAX_PATH_COMPONENT_LEN + 1) * ttt_lf_char_size());
         if (new_path == NULL) {
             ttt_error(0, errno, "malloc");
             ret = -1;
         }
         errno = 0;
-        while (ret >= 0 && (ent = readdir(dir)) != NULL) {
-            if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
+        while (ret >= 0 && (ent = ttt_readdir(dir)) != NULL) {
+            if (!ttt_lf_cmp(ent->d_name, TTT_LF_CURRENT_DIR) ||
+                    !ttt_lf_cmp(ent->d_name, TTT_LF_PARENT_DIR))
                 continue;
 #ifdef WINDOWS
             /* Skip Windows shortcuts */
-            if (ends_with_icase(ent->d_name, ".lnk"))
+            if (ends_with_icase(ent->d_name, L".lnk"))
                 continue;
 #endif
-            if (strlen(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
+            if (ttt_lf_len(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
                 ttt_error(0, 0, "can't open %s/%s: subdirectory name too long", path, ent->d_name);
                 ret = 1;
                 continue;
@@ -192,15 +173,15 @@ ttt_dir_walk_aux(const char *path, int orig_path_start,
                 /* If we failed to read the first entry, then just skip this
                  * directory, write a warning, and continue. Sometimes this
                  * happens with phantom hidden directories on Windows. */
-                ttt_error(0, errno, "skipping directory %s, failed to read contents", path);
+                ttt_error(0, errno, "skipping directory " TTT_LF_PRINTF ", failed to read contents", path);
                 ret = 1;
             }
             else {
-                ttt_error(0, errno, "error reading directory entries in %s", path);
+                ttt_error(0, errno, "error reading directory entries in " TTT_LF_PRINTF, path);
                 ret = -1;
             }
         }
-        closedir(dir);
+        ttt_closedir(dir);
 
         /* Finally, add an entry for the directory itself.
          * We add this last because the receiving end must set the directory's
@@ -241,7 +222,7 @@ ttt_dir_walk_aux(const char *path, int orig_path_start,
  *         The path to the file we found. In ttt_dir_walk_aux(), whatever
  *         level of recursion depth, this always begins with the file_path
  *         originally passed to the top-level ttt_dir_walk().
- *     STAT *st
+ *     TTT_STAT *st
  *         File metadata in the form of a struct stat or struct __stat64.
  *     int orig_path_start
  *         Offset in bytes from the start of path, pointing to the start of
@@ -254,15 +235,15 @@ ttt_dir_walk_aux(const char *path, int orig_path_start,
  * Return value is 0 on success, 1 if some files could not be statted, or -1
  * if there was a fatal error. */
 static int
-ttt_dir_walk(const char *path,
-        int (*callback)(void *cookie, const char *file_path, STAT *st,
-            int orig_path_start),
+ttt_dir_walk(TTT_LF_CHAR *path,
+        int (*callback)(void *cookie, TTT_LF_CHAR *file_path,
+            TTT_STAT *st, int orig_path_start),
         void *cookie) {
     int rc;
     int pos;
-    char *full_path = alloc_real_path_name(path);
+    TTT_LF_CHAR *full_path = alloc_real_path_name(path);
     if (full_path == NULL) {
-        ttt_error(0, errno, "%s", path);
+        ttt_error(0, errno, TTT_LF_PRINTF, path);
         return -1;
     }
 
@@ -271,7 +252,7 @@ ttt_dir_walk(const char *path,
      * If full_path is "/", orig_path_start is 1.
      * If full_path is a directory, point orig_path_start to the start of the
      * last directory component of the path. */
-    pos = strlen(full_path);
+    pos = ttt_lf_len(full_path);
     if (pos > 0)
         --pos;
 
@@ -303,7 +284,7 @@ ttt_dir_walk(const char *path,
  * responsibility to free() it.
  */
 static char *
-local_path_to_ttt_path(const char *path) {
+local_path_to_ttt_path(const TTT_LF_CHAR *path) {
     char *ttt_path;
 
     /* Skip any leading slashes */
@@ -311,7 +292,7 @@ local_path_to_ttt_path(const char *path) {
         path++;
 
     /* Take all the path components after this point. */
-    ttt_path = strdup(path);
+    ttt_path = ttt_lf_to_utf8(path);
     if (ttt_path == NULL) {
         ttt_error(0, errno, "strdup");
         return NULL;
@@ -339,15 +320,15 @@ local_path_to_ttt_path(const char *path) {
  * Return a pointer to the next directory separator of the possibly-modified
  * string, or a pointer to the string's null-terminator if there is no
  * next directory separator. */
-static char *
-make_dir_component_legal_on_windows(char *p) {
+static TTT_LF_CHAR *
+make_dir_component_legal_on_windows(TTT_LF_CHAR *p) {
     int pos;
     for (pos = 0; p[pos] != '/' && p[pos] != '\0'; ++pos) {
-        unsigned char c = (unsigned char) (p[pos]);
-        if (c < 32 || strchr("<>:\"\\|?*", c) != NULL) {
+        TTT_LF_CHAR c = p[pos];
+        if (c < 32 || wcschr(L"<>:\"\\|?*", c) != NULL) {
             c = '_';
         }
-        p[pos] = (char) c;
+        p[pos] = c;
     }
     return p + pos;
 }
@@ -369,30 +350,38 @@ make_dir_component_legal_on_windows(char *p) {
  * The returned string is created by malloc() and it is the caller's
  * responsibility to free() it.
  */
-static char *
-ttt_path_to_local_path(const char *ttt_path, const char *local_base_dir) {
-    char *full_path = NULL; /* local_base_dir joined to localised path */
-    char *localised_path = NULL; /* path with any problematic characters replaced */
+static TTT_LF_CHAR *
+ttt_path_to_local_path(const char *ttt_path, const TTT_LF_CHAR *local_base_dir) {
+    TTT_LF_CHAR *full_path = NULL; /* local_base_dir joined to localised path */
+    TTT_LF_CHAR *localised_path = NULL; /* path with any problematic characters replaced */
 
 #ifdef WINDOWS
-    char *path_ptr;
+    TTT_LF_CHAR *path_ptr;
     int r, w;
 
     /* Skip any leading slashes */
     while (*ttt_path == '/')
         ttt_path++;
 
-    localised_path = strdup(ttt_path);
-    if (localised_path == NULL)
+    localised_path = ttt_lf_from_utf8(ttt_path);
+    if (localised_path == NULL) {
+        if (errno == ENOMEM) {
+            ttt_error(0, 0, "ttt_path_to_local_path(): out of memory.");
+        }
+        else {
+            ttt_error(0, 0, "ttt_path_to_local_path: internal error: remote "
+                    "host sent us the filename %s but this isn't valid UTF-8! "
+                    "This is a bug in ttt.", ttt_path);
+        }
         return NULL;
+    }
 
     /* First, if we have any repeated slashes, condense them down into one
      * like a directory-separating accordion. */
-    strcpy(localised_path, ttt_path);
     r = 0;
     w = 0;
     for (; localised_path[r]; r++) {
-        char c = localised_path[r];
+        TTT_LF_CHAR c = localised_path[r];
         if (c != '/' || (r > 0 && localised_path[r - 1] != '/')) {
             localised_path[w++] = c;
         }
@@ -411,12 +400,12 @@ ttt_path_to_local_path(const char *ttt_path, const char *local_base_dir) {
     }
 #else
     /* ttt_path is already a valid Unix-style path delimited by slashes. */
-    localised_path = strdup(ttt_path);
+    localised_path = ttt_lf_from_utf8(ttt_path);
     if (localised_path == NULL)
         return NULL;
 #endif
 
-    full_path = malloc(strlen(local_base_dir) + 1 + strlen(localised_path) + 1);
+    full_path = malloc((ttt_lf_len(local_base_dir) + 1 + ttt_lf_len(localised_path) + 1) * ttt_lf_char_size());
     if (full_path == NULL) {
         free(localised_path);
         return NULL;
@@ -467,7 +456,7 @@ ttt_file_list_destroy(struct ttt_file_list *list) {
  * size: the size of the file, in bytes. -1 if not known.
  */
 static struct ttt_file *
-ttt_file_new(const char *local_path, const char *ttt_path, time_t mtime,
+ttt_file_new(TTT_LF_CHAR *local_path, const char *ttt_path, time_t mtime,
         int mode, long long size) {
     struct ttt_file *f = malloc(sizeof(struct ttt_file));
     if (f == NULL) {
@@ -475,7 +464,7 @@ ttt_file_new(const char *local_path, const char *ttt_path, time_t mtime,
     }
     memset(f, 0, sizeof(*f));
     if (local_path) {
-        f->local_path = strdup(local_path);
+        f->local_path = ttt_lf_dup(local_path);
         if (f->local_path == NULL)
             goto fail;
     }
@@ -507,25 +496,25 @@ fail:
  * the ttt_file object's ttt_path fields from path and orig_path_start.
  * If orig_path_start is -1, the file represents stdin and st is ignored. */
 static int
-add_local_file_to_list(void *cookie, const char *path, STAT *st, int orig_path_start) {
+add_local_file_to_list(void *cookie, TTT_LF_CHAR *path, TTT_STAT *st, int orig_path_start) {
     struct ttt_file_list *list = (struct ttt_file_list *) cookie;
     struct ttt_file *file = NULL;
 
     if (orig_path_start < 0) {
         /* stdin */
-        file = ttt_file_new("-", NULL, time(NULL), S_IFREG | 0644, -1);
+        file = ttt_file_new(TTT_LF_STDIN, NULL, time(NULL), S_IFREG | 0644, -1);
     }
     else {
         /* an actual file */
         file = ttt_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
     }
     if (file == NULL) {
-        ttt_error(0, errno, "failed to create new file object structure for %s", path);
+        ttt_error(0, errno, "failed to create new file object structure for " TTT_LF_PRINTF, path);
         return -1;
     }
     file->next = NULL;
 
-    if (orig_path_start < 0 && !strcmp(path, "-")) {
+    if (orig_path_start < 0 && !ttt_lf_cmp(path, TTT_LF_STDIN)) {
         file->ttt_path = strdup("stdin");
     }
     else {
@@ -552,7 +541,7 @@ add_local_file_to_list(void *cookie, const char *path, STAT *st, int orig_path_s
  * Derive the local_path attribute by the ttt_name given and local_base_dir. */
 static int
 add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
-        int mode, const char *ttt_name, const char *local_base_dir) {
+        int mode, const char *ttt_name, const TTT_LF_CHAR *local_base_dir) {
     struct ttt_file *file = NULL;
 
     file = ttt_file_new(NULL, ttt_name, mtime, mode, size);
@@ -838,7 +827,7 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
  */
 static void
 make_progress_report(struct ttt_file_transfer *ctx, int is_sender,
-        const char *filename, long file_number, long file_count,
+        const TTT_LF_CHAR *filename, long file_number, long file_count,
         long long file_position, long long file_size, long long bytes_sent,
         long long bytes_total, long files_skipped, int finished) {
     if (ctx->progress) {
@@ -868,7 +857,7 @@ is_progress_report_due(struct ttt_file_transfer *ctx) {
 
 static bool
 ttt_file_is_stdin(const struct ttt_file *f) {
-    return (!strcmp(f->local_path, "-") && !strcmp(f->ttt_path, "stdin"));
+    return (!ttt_lf_cmp(f->local_path, TTT_LF_STDIN) && !strcmp(f->ttt_path, "stdin"));
 }
 
 /* Already within a TTT_MSG_FILE_SET_START/TTT_MSG_FILE_SET_END block, send
@@ -925,7 +914,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             stream = stdin;
         }
         else {
-            stream = fopen(f->local_path, "rb");
+            stream = ttt_fopen(f->local_path, TTT_LF_MODE_RB);
         }
         if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
             fclose(stream);
@@ -1053,9 +1042,9 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
     /* Build a list of all the files we want to send */
     ttt_file_list_init(&file_list);
     for (int i = 0; i < ctx->num_source_paths; ++i) {
-        if (!strcmp(ctx->source_paths[i], "-")) {
+        if (!ttt_lf_cmp(ctx->source_paths[i], TTT_LF_STDIN)) {
             /* Special case - we'll read stdin and send that as a file */
-            rc = add_local_file_to_list(&file_list, "-", NULL, -1);
+            rc = add_local_file_to_list(&file_list, TTT_LF_STDIN, NULL, -1);
         }
         else {
             rc = ttt_dir_walk(ctx->source_paths[i], add_local_file_to_list, &file_list);
@@ -1119,7 +1108,7 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             bool file_failed = false;
             file_number++;
 
-            if (!ttt_file_is_stdin(f) && access(f->local_path, F_OK) != 0 && errno == ENOENT) {
+            if (!ttt_file_is_stdin(f) && ttt_access(f->local_path, F_OK) != 0 && errno == ENOENT) {
                 /* File existed when we walked the directories, but it's gone
                  * now. Report this as a non-fatal error. */
                 ttt_error(0, 0, "%s no longer exists, not sending it.", f->local_path);
@@ -1195,7 +1184,7 @@ fail:
  */
 static int
 ttt_receive_file_metadata_set(struct ttt_session *sess,
-        const char *output_dir, struct ttt_file_list *list,
+        const TTT_LF_CHAR *output_dir, struct ttt_file_list *list,
         long long *file_count_out, long long *total_size_out) {
     struct ttt_msg msg;
     struct ttt_decoded_msg decoded;
@@ -1251,10 +1240,10 @@ fail:
 /* Write a progress counter to stderr showing how far we are through the
  * file transfer. */
 static void
-ttt_update_progress(const char *current_filename,
+ttt_update_progress(const TTT_LF_CHAR *current_filename,
         long long files_received, long long file_count,
         long long total_bytes_received, long long total_size) {
-    const char *display_filename = NULL;
+    const TTT_LF_CHAR *display_filename = NULL;
     const int filename_limit = 44;
     bool filename_trimmed = false;
     char bytes_received_str[10];
@@ -1262,7 +1251,7 @@ ttt_update_progress(const char *current_filename,
 
     if (current_filename != NULL) {
         /* Show only the last filename_limit characters of the filename */
-        size_t len = strlen(current_filename);
+        size_t len = ttt_lf_len(current_filename);
         if (len > filename_limit) {
             display_filename = current_filename + len - filename_limit + 3;
             filename_trimmed = true;
@@ -1272,11 +1261,12 @@ ttt_update_progress(const char *current_filename,
         }
     }
     else {
-        display_filename = "";
+        display_filename = TTT_LF_EMPTY;
     }
 
+    /* TTT_LF_PRINTF_WIDTH: %-*s or %-*ls */
     ttt_size_to_str(total_bytes_received, bytes_received_str);
-    fprintf(stderr, "%6" PRINTF_INT64 "d/%" PRINTF_INT64 "d %s%-*s | %6s",
+    fprintf(stderr, "%6" PRINTF_INT64 "d/%" PRINTF_INT64 "d %s" TTT_LF_PRINTF_WIDTH " | %6s",
             files_received, file_count,
             filename_trimmed ? "..." : "",
             filename_limit - (filename_trimmed ? 3 : 0), display_filename,
@@ -1294,8 +1284,8 @@ ttt_update_progress(const char *current_filename,
 /* Default progress callback for a struct ttt_file_transfer object. */
 static void
 default_progress_callback(void *callback_cookie, int is_sender,
-            const char *filename, long file_number, long total_files,
-            long long file_position, long long file_size,
+            const TTT_LF_CHAR *filename, long file_number,
+            long total_files, long long file_position, long long file_size,
             long long bytes_so_far, long long total_bytes,
             long skipped_files, int finished) {
     ttt_update_progress(filename, file_number, total_files, bytes_so_far,
@@ -1342,7 +1332,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
     struct ttt_msg msg;
     struct ttt_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
-    char *local_filename = NULL; /* name of current or last file received */
+    TTT_LF_CHAR *local_filename = NULL; /* name of current or last file received */
     bool in_file_transfer = false; /* are we between FILE_METADATA and DATA_END */
     char *ttt_filename = NULL; /* filename according to FILE_METADATA */
     time_t current_file_mtime = 0;
@@ -1408,7 +1398,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* This is a regular file. */
 
                 /* Create the containing directory if it isn't already there */
-                if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
+                if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
                     ttt_error(0, err, "failed to create directory for %s", local_filename);
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for %s: %s", local_filename, strerror(err));
@@ -1416,10 +1406,10 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 }
 
                 /* Open a new file for writing. */
-                current_file = fopen(local_filename, "wb");
+                current_file = ttt_fopen(local_filename, TTT_LF_MODE_WB);
                 if (ttt_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
                     fclose(current_file);
-                    unlink(local_filename);
+                    ttt_unlink(local_filename);
                     current_file = NULL;
                     errno = EPERM;
                 }
@@ -1430,7 +1420,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
 #ifndef WINDOWS
             else if (S_ISFIFO(current_file_mode)) {
                 /* Create a FIFO, creating its containing directories if necessary. */
-                if (ttt_mkdir_parents(local_filename, 0777, true, DIR_SEP) < 0) {
+                if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
                     ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
@@ -1447,8 +1437,8 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * files. Create the directory if we haven't already.
                  * When we get the TTT_MSG_FILE_DATA_END message, we'll set
                  * its timestamp and permissions. */
-                if (access(local_filename, F_OK) != 0) {
-                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, false, DIR_SEP) < 0) {
+                if (ttt_access(local_filename, F_OK) != 0) {
+                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
                         ttt_error(0, errno, "failed to create directory %s", local_filename);
                     }
                 }
@@ -1514,7 +1504,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ttt_filename, strerror(err));
 
                     /* Try to delete the file */
-                    unlink(local_filename);
+                    ttt_unlink(local_filename);
                     goto fail;
                 }
                 current_file = NULL;
@@ -1530,10 +1520,10 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     if (!S_ISDIR(current_file_mode))
 #endif
                     {
-                        struct utimbuf timbuf;
+                        TTT_UTIMBUF timbuf;
                         timbuf.actime = time(NULL);
                         timbuf.modtime = current_file_mtime;
-                        if (utime(local_filename, &timbuf) < 0) {
+                        if (ttt_utime(local_filename, &timbuf) < 0) {
                             ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
                         }
                     }
@@ -1549,7 +1539,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * report and remember it, and delete any partially-transferred
                  * file. */
                 if (ctx->output_file == NULL) {
-                    unlink(local_filename);
+                    ttt_unlink(local_filename);
                 }
                 files_sender_failed++;
 
@@ -1777,13 +1767,13 @@ ttt_file_transfer_init_sender(struct ttt_file_transfer *ctx, const char **source
 
     /* Copy each string from source_paths to ctx->source_paths */
     if (num_source_paths > 0) {
-        ctx->source_paths = malloc(sizeof(char *) * num_source_paths);
+        ctx->source_paths = malloc(sizeof(TTT_LF_CHAR *) * num_source_paths);
         if (ctx->source_paths == NULL)
             goto fail;
         ctx->num_source_paths = num_source_paths;
-        memset(ctx->source_paths, 0, sizeof(char *) * num_source_paths);
+        memset(ctx->source_paths, 0, sizeof(TTT_LF_CHAR *) * num_source_paths);
         for (int i = 0; i < num_source_paths; ++i) {
-            ctx->source_paths[i] = strdup(source_paths[i]);
+            ctx->source_paths[i] = ttt_lf_from_locale(source_paths[i]);
             if (ctx->source_paths[i] == NULL) {
                 goto fail;
             }
@@ -1806,7 +1796,7 @@ int
 ttt_file_transfer_init_receiver(struct ttt_file_transfer *ctx, const char *output_dir) {
     ttt_file_transfer_init(ctx, false);
 
-    ctx->output_dir = strdup(output_dir);
+    ctx->output_dir = ttt_lf_from_locale(output_dir);
     if (ctx->output_dir == NULL)
         goto fail;
 
@@ -1945,7 +1935,7 @@ ttt_file_transfer_destroy(struct ttt_file_transfer *ctx) {
 #include <CUnit/CUnit.h>
 
 static void
-str_replace(char *str, char out, char in) {
+local_filename_replace(TTT_LF_CHAR *str, TTT_LF_CHAR out, TTT_LF_CHAR in) {
     for (; *str; str++) {
         if (*str == out)
             *str = in;
@@ -1971,24 +1961,29 @@ test_join_paths(void) {
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        char *path1 = strdup(test_cases[i].path1);
-        char *path2 = strdup(test_cases[i].path2);
-        char *expected = strdup(test_cases[i].expected);
-        char *observed = malloc(strlen(path1) + strlen(path2) + 2);
+        TTT_LF_CHAR *path1 = ttt_lf_from_utf8(test_cases[i].path1);
+        TTT_LF_CHAR *path2 = ttt_lf_from_utf8(test_cases[i].path2);
+        TTT_LF_CHAR *expected = ttt_lf_from_utf8(test_cases[i].expected);
+        TTT_LF_CHAR *observed = malloc((ttt_lf_len(path1) + ttt_lf_len(path2) + 2) * ttt_lf_char_size());
         char test_num[20];
         sprintf(test_num, "%d", i);
 
         /* Replace / with the local directory separator */
-        str_replace(path1, '/', DIR_SEP);
-        str_replace(path2, '/', DIR_SEP);
-        str_replace(expected, '/', DIR_SEP);
+        local_filename_replace(path1, '/', DIR_SEP);
+        local_filename_replace(path2, '/', DIR_SEP);
+        local_filename_replace(expected, '/', DIR_SEP);
 
         join_paths(path1, path2, observed);
 
-        if (strcmp(observed, expected)) {
-            fprintf(stderr, "test_join_paths: path1 \"%s\", path2 \"%s\", expected \"%s\", observed \"%s\"\n", path1, path2, expected, observed);
+        if (ttt_lf_cmp(observed, expected)) {
+            fprintf(stderr, "test_join_paths: "
+                    "path1 \"" TTT_LF_PRINTF
+                    "\", path2 \"" TTT_LF_PRINTF
+                    "\", expected \"" TTT_LF_PRINTF
+                    "\", observed \"" TTT_LF_PRINTF "\"\n",
+                    path1, path2, expected, observed);
+            CU_FAIL("join_paths() result not as expected");
         }
-        CU_ASSERT_STRING_EQUAL(observed, expected);
 
         free(path1);
         free(path2);
@@ -2009,15 +2004,17 @@ test_local_path_to_ttt_path(void) {
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        char *local_path = strdup(test_cases[i].local_path);
+        TTT_LF_CHAR *local_path = ttt_lf_from_utf8(test_cases[i].local_path);
         const char *expected = test_cases[i].expected;
         char *observed;
 
-        str_replace(local_path, '/', DIR_SEP);
+        local_filename_replace(local_path, '/', DIR_SEP);
 
         observed = local_path_to_ttt_path(local_path);
         if (strcmp(observed, expected) != 0) {
-            fprintf(stderr, "test_local_path_to_ttt_path: local_path \"%s\", expected \"%s\", observed \"%s\"\n", local_path, expected, observed);
+            fprintf(stderr, "test_local_path_to_ttt_path: local_path \""
+                    TTT_LF_PRINTF "\", expected \"%s\", "
+                    "observed \"%s\"\n", local_path, expected, observed);
         }
         CU_ASSERT_STRING_EQUAL(observed, expected);
 
@@ -2040,25 +2037,29 @@ test_ttt_path_to_local_path(void) {
         { "foo/bar/baz", "../some/dest", "../some/dest/foo/bar/baz" },
 #ifdef WINDOWS
         { "s<om>e/ill:egal\\file|name/te*st?txt", "C:\\my\\dir",
-            "C:\\my\\dir\\s_om_e\\ill_egal_file_name\\te_st_txt" }
+            "C:\\my\\dir\\s_om_e\\ill_egal_file_name\\te_st_txt" },
+        { "\xc2\xbd.txt", ".", ".\\\xc2\xbd.txt" },
 #endif
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
         const char *ttt_path = test_cases[i].ttt_path;
-        char *local_base_dir = strdup(test_cases[i].local_base_dir);
-        char *expected = strdup(test_cases[i].expected);
-        char *observed;
+        TTT_LF_CHAR *local_base_dir = ttt_lf_from_utf8(test_cases[i].local_base_dir);
+        TTT_LF_CHAR *expected = ttt_lf_from_utf8(test_cases[i].expected);
+        TTT_LF_CHAR *observed;
 
-        str_replace(local_base_dir, '/', DIR_SEP);
-        str_replace(expected, '/', DIR_SEP);
+        local_filename_replace(local_base_dir, '/', DIR_SEP);
+        local_filename_replace(expected, '/', DIR_SEP);
 
         observed = ttt_path_to_local_path(ttt_path, local_base_dir);
-        if (strcmp(observed, expected) != 0) {
-            fprintf(stderr, "test_ttt_path_to_local_path(): ttt_path \"%s\", local_base_dir \"%s\", expected \"%s\", observed \"%s\"\n",
+        if (ttt_lf_cmp(observed, expected) != 0) {
+            fprintf(stderr, "test_ttt_path_to_local_path(): ttt_path \"%s\", "
+                    "local_base_dir \"" TTT_LF_PRINTF
+                    "\", expected \"" TTT_LF_PRINTF
+                    "\", observed \"" TTT_LF_PRINTF "\"\n",
                     ttt_path, local_base_dir, expected, observed);
+            CU_FAIL("ttt_path_to_local_path() result not as expected");
         }
-        CU_ASSERT_STRING_EQUAL(observed, expected);
 
         free(observed);
         free(local_base_dir);

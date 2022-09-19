@@ -144,6 +144,7 @@
  *                                         the slash character ('/'). There is
  *                                         no support for directory components
  *                                         or filenames containing '/' or '\0'.
+ *                                         The string must be valid UTF-8.
  *
  * TTT_MSG_FILE_METADATA_SUMMARY: contains a summary of the files to be sent,
  * if the sender doesn't want to send an itemised list of all the files.

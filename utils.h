@@ -9,6 +9,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h> /* for socklen_t */
 #include <winsock.h>
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #endif
@@ -41,14 +42,6 @@
 /* Useful struct timeval wrangler */
 /* Return 1 if struct timeval X is later than struct timeval Y */
 #define TIMEVAL_X_GE_Y(X, Y) ((X).tv_sec > (Y).tv_sec || ((X).tv_sec == (Y).tv_sec && (X).tv_usec >= (Y).tv_usec))
-
-#ifdef WINDOWS
-typedef struct __stat64 STAT;
-#define ttt_stat _stat64
-#else
-typedef struct stat STAT;
-#define ttt_stat lstat
-#endif
 
 /* Standard "argh just dump this as hex to stdout for generic debugging
  * purposes" function.*/
@@ -101,15 +94,6 @@ timeval_add(const struct timeval *t1, const struct timeval *t2, struct timeval *
 void
 timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *result);
 
-/* Create the directory named in "path" and give it the permission bits "mode".
- * If parents_only is set, ignore the last component of "path".
- * dir_sep is the directory separator according to the local OS.
- *
- * Returns 0 on success, nonzero on error.
- */
-int
-ttt_mkdir_parents(const char *path, int mode, bool parents_only, char dir_sep);
-
 /* Convert a size, in bytes, to a human-readable string with an appropriately
  * sized suffix, such as "4.32MB" or "636KB". dest must point to a buffer with
  * space for at least 7 bytes.
@@ -125,15 +109,6 @@ ttt_size_to_str(long long size, char *dest);
  * relevant option name, which is included in the error message. */
 double
 parse_double_or_exit(const char *str, const char *option);
-
-/* (best-effort) platform-independent chmod(). */
-#ifdef WINDOWS
-int
-ttt_chmod(const char *path, int unix_mode);
-#else
-int
-ttt_chmod(const char *path, mode_t mode);
-#endif
 
 /* Set up the sockets API. On Linux this is not needed and is a no-op. On
  * Windows the socket library won't work unless you call this before doing
