@@ -15,6 +15,44 @@
 
 #include "encryption.h"
 
+/* Hello message contains 12 bytes, all in network byte order...
+ *
+ * Bytes   Type        Description
+ * 0-3     int32       Magic number 0x54545448 ("TTTH")
+ * 4-5     int16       Minimum supported protocol version
+ * 6-7     int16       Maximum supported protocol version
+ * 8-11    int32       Flags (reserved for future use, currently 0)
+ *
+ * First the client sends the hello message to the server, then the server
+ * replies with its own hello message.
+ *
+ * If the minimum supported protocol version of either host is greater than
+ * the maximum supported protocol version of the other host, there is a
+ * protocol version mismatch and both sides close the connection and report
+ * an error.
+ *
+ * Otherwise, the protocol version for the ensuing session will be
+ * MIN(client_max_version, server_max_version).
+ *
+ * Currently the only protocol version in existence is version 1, which is the
+ * one implemented by this code. The protocol version exchange is intended so
+ * that the protocol can be changed later on but stay backwardly compatible
+ * with older versions where possible.
+ *
+ * The flags parameter is intended to enable each host to indicate support for
+ * optional features without having to make a whole new protocol version every
+ * time such an optional feature is added.
+ */
+#define TTT_OUR_MIN_PROTOCOL_VERSION 1
+#define TTT_OUR_MAX_PROTOCOL_VERSION 1
+
+#define TTT_HELLO_SIZE 12
+#define TTT_HELLO_MAGIC 0x54545448
+#define TTT_HELLO_MAGIC_OFFSET 0
+#define TTT_HELLO_MIN_PROT_OFFSET 4
+#define TTT_HELLO_MAX_PROT_OFFSET 6
+#define TTT_HELLO_FLAGS_OFFSET 8
+
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing
  * only, the default will be encrypted when I've deciphered the OpenSSL docs. */
 struct ttt_session {
@@ -36,6 +74,19 @@ struct ttt_session {
     char plaintext_handshake_message[10];
     int plaintext_handshake_message_pos;
 
+    /* Pre-SSL hello state, where the client sends its protocol version number
+     * and the server replies with its protocol version number. */
+    unsigned char client_hello[TTT_HELLO_SIZE];
+    int client_hello_pos;
+    unsigned char server_hello[TTT_HELLO_SIZE];
+    int server_hello_pos;
+
+    /* Negotiated protocol version */
+    unsigned short protocol_version;
+    unsigned long our_flags;
+    unsigned long their_flags;
+
+    /* OpenSSL session context. */
     SSL *ssl;
     SSL_CTX *ssl_ctx;
 

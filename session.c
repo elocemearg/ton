@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -91,6 +92,22 @@ show_ssl_errors(FILE *out) {
     }
 }
 
+/* Test if the reason why the last socket call failed is because it would block. */
+static bool
+ttt_would_block(void) {
+#ifdef WINDOWS
+    switch (WSAGetLastError()) {
+        case WSAEINPROGRESS:
+        case WSAEWOULDBLOCK:
+            return true;
+        default:
+            return false;
+    }
+#else
+    return (errno == EAGAIN || errno == EWOULDBLOCK);
+#endif
+}
+
 static void
 ttt_session_plain_destroy(struct ttt_session *s) {
     closesocket(s->sock);
@@ -133,7 +150,7 @@ handshake_receive_hello(struct ttt_session *s) {
     } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
 
     if (rc < 0) {
-        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (ttt_would_block()) {
             s->want_read = true;
             return -1;
         }
@@ -177,7 +194,7 @@ handshake_send_hello(struct ttt_session *s) {
     } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
 
     if (rc < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (ttt_would_block()) {
             s->want_write = true;
             return -1;
         }
@@ -294,8 +311,150 @@ ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
     }
 }
 
+/* Make progress on a pre-TLS-handshake "hello" exchange, where the client
+ * sends the server a TTT_HELLO_SIZE-byte hello message, and the server replies
+ * with its own hello message. This contains information like which version of
+ * the wire protocol each side supports.
+ *
+ * This may be called with s->sock blocking or non-blocking.
+ *
+ * Return < 0 if there was some unrecoverable error, like a connection error
+ *     or a protocol version mismatch.
+ * Return 0 if the hello exchange completed and was successful, in which case
+ *     s->protocol_version is set to the negotiated protocol version.
+ * Return 1 if we can temporarily not proceed because the socket is
+ *     non-blocking and there's no data to receive or we can't currently send.
+ */
+static int
+ttt_session_hello(struct ttt_session *s) {
+    int rc;
+
+    while (s->client_hello_pos < TTT_HELLO_SIZE) {
+        /* Client sends their hello first */
+        if (s->is_server)
+            rc = recv(s->sock, (char *) s->client_hello + s->client_hello_pos,
+                    TTT_HELLO_SIZE - s->client_hello_pos, 0);
+        else
+            rc = send(s->sock, (char *) s->client_hello + s->client_hello_pos,
+                    TTT_HELLO_SIZE - s->client_hello_pos, 0);
+        if (rc < 0 && ttt_would_block()) {
+            /* Can't proceed without blocking */
+            if (s->is_server)
+                s->want_read = true;
+            else
+                s->want_write = true;
+            return 1;
+        }
+        else if (rc <= 0) {
+            /* Fail. Don't report errors here, because we may have received
+             * multiple connections of which one completed first, and the
+             * others then all legitimately closed. */
+            /*if (rc == 0)
+                ttt_error(0, 0, "unexpected EOF during client hello");
+            else
+                ttt_socket_error(0, "connection failed during client hello");*/
+            goto fail;
+        }
+        else {
+            /* No error and we sent or received 1 or more bytes */
+            s->client_hello_pos += rc;
+        }
+    }
+
+    while (s->client_hello_pos == TTT_HELLO_SIZE && s->server_hello_pos < TTT_HELLO_SIZE) {
+        /* Then the server replies with their hello */
+        if (s->is_server)
+            rc = send(s->sock, (char *) s->server_hello + s->server_hello_pos,
+                    TTT_HELLO_SIZE - s->server_hello_pos, 0);
+        else
+            rc = recv(s->sock, (char *) s->server_hello + s->server_hello_pos,
+                    TTT_HELLO_SIZE - s->server_hello_pos, 0);
+        if (rc < 0 && ttt_would_block()) {
+            /* We can't proceed without blocking */
+            if (s->is_server)
+                s->want_write = true;
+            else
+                s->want_read = true;
+            return 1;
+        }
+        else if (rc <= 0) {
+            /* Don't report errors, because as above, they can legitimately
+             * happen if another connection won the race. */
+            /*if (rc == 0)
+                ttt_error(0, 0, "unexpected EOF during client hello");
+            else
+                ttt_socket_error(0, "connection failed during server hello");*/
+            goto fail;
+        }
+        else {
+            /* We sent/received some data */
+            s->server_hello_pos += rc;
+        }
+    }
+
+    /* If we get here, we have completed the hello exchange. Check that the
+     * client and server protocol ranges are compatible and return some
+     * good or bad news. */
+    assert(s->client_hello_pos == TTT_HELLO_SIZE);
+    assert(s->server_hello_pos == TTT_HELLO_SIZE);
+
+    unsigned char *their_hello = (s->is_server ? s->client_hello : s->server_hello);
+    const uint16_t our_min = TTT_OUR_MIN_PROTOCOL_VERSION;
+    const uint16_t our_max = TTT_OUR_MAX_PROTOCOL_VERSION;
+    const uint32_t their_magic = ntohl(*(uint32_t *)(their_hello + TTT_HELLO_MAGIC_OFFSET));
+    const uint16_t their_min = ntohs(*(uint16_t *)(their_hello + TTT_HELLO_MIN_PROT_OFFSET));
+    const uint16_t their_max = ntohs(*(uint16_t *)(their_hello + TTT_HELLO_MAX_PROT_OFFSET));
+    const uint16_t their_flags = ntohl(*(uint32_t *)(their_hello + TTT_HELLO_FLAGS_OFFSET));
+
+    if (their_magic != TTT_HELLO_MAGIC) {
+        ttt_error(0, 0, "incorrect magic number in hello message: expected 0x%08x, received 0x%08x", TTT_HELLO_MAGIC, their_magic);
+        goto fail;
+    }
+    if (their_min > our_max) {
+        ttt_error(0, 0, "TTT protocol version mismatch: remote host requires version %hu but we only support up to version %hu", their_min, our_max);
+        goto fail;
+    }
+    if (our_min > their_max) {
+        ttt_error(0, 0, "TTT protocol version mismatch: we require version %hu but remote host only supports up to version %hu", our_min, their_max);
+        goto fail;
+    }
+    s->their_flags = their_flags;
+    s->protocol_version = ((their_max < our_max) ? their_max : our_max);
+
+    /* fprintf(stderr, "their magic 0x%08x, their min %hu, their max %hu, their flags 0x%08x, negotiated protocol version %hu\n", their_magic, their_min, their_max, their_flags, s->protocol_version); */
+
+    /* Indicate hello exchange was successful, and we're talking to a client
+     * that's going to understand us */
+    return 0;
+
+fail:
+    s->failed = true;
+    return -1;
+}
+
 static int
 ttt_session_tls_handshake(struct ttt_session *s) {
+    int rc;
+
+    /* If we haven't got the pre-handshake hello out of the way, make some
+     * progress with that. */
+    if (s->server_hello_pos < TTT_HELLO_SIZE) {
+        rc = ttt_session_hello(s);
+        if (rc < 0) {
+            /* *fail horns* */
+            return rc;
+        }
+        else if (rc > 0) {
+            /* Hello exchange not failed, but not yet complete */
+            return 1;
+        }
+
+        /* Otherwise, hello exchange should have completed, and we can move
+         * on to the TLS handshake. */
+        assert(s->server_hello_pos == TTT_HELLO_SIZE);
+        assert(s->protocol_version > 0);
+    }
+
     /* Call SSL_do_handshake. If the underlying socket is blocking, this will
      * block until the handshake succeeds (returns 1) or permanently fails
      * (return <1).
@@ -309,7 +468,7 @@ ttt_session_tls_handshake(struct ttt_session *s) {
      * If SSL_do_handshake() returns <1 for any other reason, we set
      * s->failed and return -1.
      */
-    int rc = SSL_do_handshake(s->ssl);
+    rc = SSL_do_handshake(s->ssl);
     if (rc == 1) {
         /* Success */
         /*const SSL_CIPHER *cipher = SSL_get_current_cipher(s->ssl);
@@ -443,6 +602,17 @@ ttt_session_tls_init(struct ttt_session *s) {
     return 0;
 }
 
+/* Initialise a TTT_HELLO_SIZE-byte hello message with the given information.
+ * msg must point to a buffer of TTT_HELLO_SIZE bytes. */
+static void
+ttt_session_init_hello_msg(unsigned char *msg, unsigned short min_prot_ver,
+        unsigned short max_prot_ver, unsigned long flags) {
+    *((uint32_t *) (msg + TTT_HELLO_MAGIC_OFFSET)) = htonl(TTT_HELLO_MAGIC);
+    *((uint16_t *) (msg + TTT_HELLO_MIN_PROT_OFFSET)) = htons(min_prot_ver);
+    *((uint16_t *) (msg + TTT_HELLO_MAX_PROT_OFFSET)) = htons(max_prot_ver);
+    *((uint32_t *) (msg + TTT_HELLO_FLAGS_OFFSET)) = htonl(flags);
+}
+
 int
 ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
         socklen_t addr_len, bool use_tls, bool is_server,
@@ -459,6 +629,18 @@ ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
     s->failed = false;
     s->is_server = is_server;
     s->next = NULL;
+
+    /* Not yet sent/received either hello message */
+    s->client_hello_pos = 0;
+    s->server_hello_pos = 0;
+
+    /* Set flags to zero until we find a use for them */
+    s->our_flags = 0;
+
+    /* Set our own hello message ready to send to the other host */
+    ttt_session_init_hello_msg(s->is_server ? s->server_hello : s->client_hello,
+            TTT_OUR_MIN_PROTOCOL_VERSION, TTT_OUR_MAX_PROTOCOL_VERSION,
+            s->our_flags);
 
     if (key) {
         memcpy(s->session_key, key, TTT_KEY_SIZE);
