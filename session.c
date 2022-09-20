@@ -118,7 +118,7 @@ static int
 ttt_session_plain_write(struct ttt_session *s, const void *buf, size_t len) {
     ssize_t bytes_sent = 0;
     do {
-        ssize_t rc = send(s->sock, buf + bytes_sent, len - bytes_sent, 0);
+        ssize_t rc = send(s->sock, (const char *) buf + bytes_sent, len - bytes_sent, 0);
         if (rc <= 0) {
             return (int) rc;
         }

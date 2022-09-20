@@ -225,7 +225,7 @@ ttt_msg_decode(struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
             decoded->u.metadata.size = int64_ntoh(body, 0);
             decoded->u.metadata.mtime = int64_ntoh(body, 8);
             decoded->u.metadata.mode = int32_ntoh(body, 16);
-            decoded->u.metadata.name = body + 20;
+            decoded->u.metadata.name = (char *) body + 20;
             str = decoded->u.metadata.name;
             str_offset = 20;
             break;
@@ -239,7 +239,7 @@ ttt_msg_decode(struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
         case TTT_MSG_FATAL_ERROR:
         case TTT_MSG_FILE_DATA_END:
             decoded->u.err.code = int32_ntoh(body, 0);
-            decoded->u.err.message = body + 4;
+            decoded->u.err.message = (char *) body + 4;
             str_offset = 4;
             break;
 

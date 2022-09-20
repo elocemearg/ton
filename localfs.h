@@ -87,8 +87,8 @@ typedef struct _utimbuf TTT_UTIMBUF;
 #define TTT_LF_PARENT_DIR L".."
 #define TTT_LF_STDIN L"-"
 
-#define TTT_LF_PRINTF "%S"
-#define TTT_LF_PRINTF_WIDTH "%-*S"
+#define TTT_LF_PRINTF "%ls"
+#define TTT_LF_PRINTF_WIDTH "%-*ls"
 
 #define TTT_LF_MODE_WB L"wb"
 #define TTT_LF_MODE_RB L"rb"

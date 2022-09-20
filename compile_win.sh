@@ -6,7 +6,7 @@ OPENSSL_INCLUDE=$OPENSSL_ROOT/include
 CUNIT_ROOT=/home/graeme/cunit/install/lib
 CUNIT_INCLUDE=/home/graeme/cunit/install/include
 
-$GCC -Wall -DWINDOWS=1 -DTTT_UNIT_TESTS=1 -g -static \
+$GCC -Wall -DWINDOWS=1 -DTTT_UNIT_TESTS=1 -std=gnu99 -g -static \
     -I "$OPENSSL_INCLUDE" -I "$CUNIT_INCLUDE" \
     -o ttt.exe \
     ttt.c ttttest.c tttpush.c tttpull.c discover.c utils.c encryption.c \

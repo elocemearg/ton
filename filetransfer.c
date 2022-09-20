@@ -575,7 +575,7 @@ static int
 readall(struct ttt_session *sess, void *buf, int length) {
     size_t bytes_read = 0;
     do {
-        int rc = sess->read(sess, buf + bytes_read, length - bytes_read);
+        int rc = sess->read(sess, (char *) buf + bytes_read, length - bytes_read);
         if (rc <= 0) {
             if (rc < 0 && errno == EINTR)
                 continue;
