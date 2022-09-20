@@ -65,7 +65,12 @@ print_help(FILE *f) {
 "ttt pull: receive a set of files or directories over TTT\n"
 "\n"
 "Usage:\n"
-"    ttt pull [-o outputdirectory] [other options...]\n"
+"    ttt pull [options] [destination directory]\n"
+"\n"
+"The default destination directory is the current working directory. If a\n"
+"destination directory is given, it will be created if it does not exist.\n"
+"Use - to write all received files to standard output.\n"
+"\n"
 "Options:\n"
 "    -4, --ipv4               Use IPv4 only, not IPv6\n"
 "    -6, --ipv6               Use IPv6 only, not IPv4\n"
@@ -89,10 +94,8 @@ print_help(FILE *f) {
 "                               %s)\n"
 "    --multicast-ttl <n>      Set multicast TTL to <n> (default 1)\n"
 "    -q, --quiet              Don't show progress updates\n"
-"    -o <dir>                 Destination directory for received file(s).\n"
-"                               Default is the current directory. The directory\n"
-"                               will be created if it doesn't exist.\n"
-"                               Use - to write all received files to stdout.\n"
+"    -o <dir>                 Another way to set the destination directory.\n"
+"                               -o - is equivalent to --output-file -\n"
 "    --output-file <file>     Concatenate all received files to one output file\n"
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
@@ -334,9 +337,23 @@ main_pull(int argc, char **argv) {
         announce_types = TTT_ANNOUNCE_BOTH;
     }
 
+    /* If a positional argument is given, it's the destination directory. */
+    if (optind < argc) {
+        output_dir = argv[optind++];
+        if (optind < argc) {
+            /* But we can't have more than one. */
+            ttt_error(1, 0, "%s: only one destination directory may be given", argv[optind]);
+        }
+        if (!strcmp(output_dir, "-")) {
+            /* Special case: output directory "-" means output file is stdout */
+            output_dir = NULL;
+            output_filename = "-";
+        }
+    }
+
     if (output_filename != NULL && output_dir != NULL) {
         /* We can't have an output file and an output directory. */
-        ttt_error(1, 0, "-o and --output-file may not be combined");
+        ttt_error(1, 0, "--output-file may not be supplied if a destination directory is also supplied");
     }
 
     if (output_dir == NULL) {

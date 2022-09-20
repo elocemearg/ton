@@ -183,7 +183,8 @@ ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_pr
 void
 ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value);
 
-/* If f != NULL, write all the data in all the files we receive to f.
+/* If f != NULL, write all the data in all the files we receive to f, and
+ * the output directory passed to ttt_file_transfer_init_receiver() is ignored.
  * If f == NULL, files we receive get written to the output directory as normal.
  */
 void
