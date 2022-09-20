@@ -8,6 +8,7 @@
 #include <winsock2.h>
 #include <winsock.h>
 #else
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #endif
@@ -137,111 +138,9 @@ ttt_session_plain_make_blocking(struct ttt_session *s) {
 }
 
 static int
-handshake_receive_hello(struct ttt_session *s) {
-    const int message_length = 6;
-    const char *message = "hello\n";
-    int rc;
-
-    do {
-        rc = s->read(s, s->plaintext_handshake_message + s->plaintext_handshake_message_pos, message_length - s->plaintext_handshake_message_pos);
-        if (rc > 0) {
-            s->plaintext_handshake_message_pos += rc;
-        }
-    } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
-
-    if (rc < 0) {
-        if (ttt_would_block()) {
-            s->want_read = true;
-            return -1;
-        }
-        else {
-            ttt_error(0, errno, "handshake read");
-            s->failed = true;
-            show_ssl_errors(stderr);
-            return -1;
-        }
-    }
-    else if (rc == 0) {
-        ttt_error(0, 0, "unexpected EOF from peer");
-        s->failed = true;
-        return -1;
-    }
-    else {
-        if (!memcmp(s->plaintext_handshake_message, message, message_length)) {
-            s->plaintext_handshake_state++;
-            s->plaintext_handshake_message_pos = 0;
-            return 0;
-        }
-        else {
-            ttt_error(0, 0, "unexpected handshake message: %.*s", s->plaintext_handshake_message_pos, s->plaintext_handshake_message);
-            s->failed = true;
-            return -1;
-        }
-    }
-}
-
-static int
-handshake_send_hello(struct ttt_session *s) {
-    const int message_length = 6;
-    const char *message = "hello\n";
-    int rc;
-
-    do {
-        rc = s->write(s, message + s->plaintext_handshake_message_pos, message_length - s->plaintext_handshake_message_pos);
-        if (rc > 0) {
-            s->plaintext_handshake_message_pos += rc;
-        }
-    } while (rc > 0 && s->plaintext_handshake_message_pos < message_length);
-
-    if (rc < 0) {
-        if (ttt_would_block()) {
-            s->want_write = true;
-            return -1;
-        }
-        else {
-            ttt_error(0, errno, "handshake write");
-            s->failed = true;
-            show_ssl_errors(stderr);
-            return -1;
-        }
-    }
-    else if (rc == 0) {
-        ttt_error(0, 0, "unexpected EOF during handshake write");
-        s->failed = true;
-        return -1;
-    }
-    else {
-        s->plaintext_handshake_state++;
-        s->plaintext_handshake_message_pos = 0;
-        return 0;
-    }
-}
-
-static int
 ttt_session_plain_handshake(struct ttt_session *s) {
-    /* Simple toy handshake: client says hello, server replies hello.
-     * This works regardless of whether the socket is blocking or
-     * non-blocking. */
-    int rc = 0;
-    if (s->plaintext_handshake_state == 0) {
-        if (s->is_server) {
-            rc = handshake_receive_hello(s);
-        }
-        else {
-            rc = handshake_send_hello(s);
-        }
-    }
-    if (rc == 0) {
-        if (s->plaintext_handshake_state == 1) {
-            if (s->is_server) {
-                rc = handshake_send_hello(s);
-            }
-            else {
-                rc = handshake_receive_hello(s);
-            }
-        }
-    }
-    return rc;
+    /* No handshake in plaintext session. Not even sure this works any more. */
+    return 0;
 }
 
 static int
@@ -311,6 +210,19 @@ ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
     }
 }
 
+static void
+ttt_socket_flush(int sock) {
+#ifdef WINDOWS
+    const DWORD one = 1;
+    const DWORD zero = 0;
+#else
+    const int one = 1;
+    const int zero = 0;
+#endif
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *) &one, sizeof(one));
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *) &zero, sizeof(zero));
+}
+
 /* Make progress on a pre-TLS-handshake "hello" exchange, where the client
  * sends the server a TTT_HELLO_SIZE-byte hello message, and the server replies
  * with its own hello message. This contains information like which version of
@@ -358,6 +270,12 @@ ttt_session_hello(struct ttt_session *s) {
         else {
             /* No error and we sent or received 1 or more bytes */
             s->client_hello_pos += rc;
+            if (s->client_hello_pos == TTT_HELLO_SIZE && !s->is_server) {
+                /* Finished sending hello message, and we aren't going to send
+                 * anything more until we receive a reply to it. Flush the
+                 * socket so that it doesn't get unnecessarily delayed. */
+                ttt_socket_flush(s->sock);
+            }
         }
     }
 
@@ -389,6 +307,9 @@ ttt_session_hello(struct ttt_session *s) {
         else {
             /* We sent/received some data */
             s->server_hello_pos += rc;
+            if (s->server_hello_pos == TTT_HELLO_SIZE && s->is_server) {
+                ttt_socket_flush(s->sock);
+            }
         }
     }
 
