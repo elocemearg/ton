@@ -1328,7 +1328,7 @@ default_progress_callback(void *callback_cookie, int is_sender,
 static int
 ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
         struct ton_file_list *list, long long file_count, long long total_size,
-        long long *sender_failed_file_count) {
+        long long *receiver_skipped_count, long long *sender_failed_file_count) {
     struct ton_msg msg;
     struct ton_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
@@ -1415,6 +1415,7 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 }
                 if (current_file == NULL) {
                     ton_error(0, errno, "skipping " TON_LF_PRINTF ": failed to open for writing", local_filename);
+                    ++*receiver_skipped_count;
                 }
             }
 #ifndef WINDOWS
@@ -1428,6 +1429,7 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 }
                 if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
                     ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, local_filename);
+                    ++*receiver_skipped_count;
                 }
             }
 #endif
@@ -1440,6 +1442,7 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 if (ton_access(local_filename, F_OK) != 0) {
                     if (ton_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
                         ton_error(0, errno, "failed to create directory " TON_LF_PRINTF, local_filename);
+                        ++*receiver_skipped_count;
                     }
                 }
             }
@@ -1628,6 +1631,7 @@ fail:
 static int
 ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
         struct ton_session *sess, long long *file_count_out,
+        long long *receiver_skipped_file_count_out,
         long long *sender_failed_file_count_out) {
     struct ton_file_list list;
     struct ton_msg msg;
@@ -1636,6 +1640,7 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
     int rc;
     long long file_count = -1, total_size = -1;
     long long sender_failed_file_count = 0;
+    long long receiver_skipped_file_count = 0;
     bool file_set_rejected = false;
 
     ton_file_list_init(&list);
@@ -1694,7 +1699,8 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
                 }
 
                 /* Receive files and write them to output_dir */
-                rc = ton_receive_file_set(ctx, sess, &list, file_count, total_size, &sender_failed_file_count);
+                rc = ton_receive_file_set(ctx, sess, &list, file_count,
+                        total_size, &receiver_skipped_file_count, &sender_failed_file_count);
                 if (rc < 0)
                     goto fail;
 
@@ -1720,6 +1726,8 @@ end:
         *file_count_out = file_count;
     if (sender_failed_file_count_out)
         *sender_failed_file_count_out = sender_failed_file_count;
+    if (receiver_skipped_file_count_out)
+        *receiver_skipped_file_count_out = receiver_skipped_file_count;
 
     ton_file_list_destroy(&list);
     return return_value;
@@ -1842,7 +1850,8 @@ ton_file_transfer_session(struct ton_file_transfer *ctx, struct ton_session *ses
     int rc;
 
     while (!finished) {
-        long long total_files_to_send = 0, num_files_failed = 0;
+        long long total_files_to_send = 0, num_files_sender_failed = 0;
+        long long num_files_receiver_skipped = 0;
         if (is_sender) {
             if (have_been_sender) {
                 /* Already been sender, so finish, don't send all the
@@ -1851,19 +1860,25 @@ ton_file_transfer_session(struct ton_file_transfer *ctx, struct ton_session *ses
             }
             else {
                 rc = ton_file_transfer_session_sender(ctx, sess,
-                        &total_files_to_send, &num_files_failed);
+                        &total_files_to_send, &num_files_sender_failed);
                 have_been_sender = true;
             }
         }
         else {
             rc = ton_file_transfer_session_receiver(ctx, sess,
-                    &total_files_to_send, &num_files_failed);
+                    &total_files_to_send, &num_files_receiver_skipped,
+                    &num_files_sender_failed);
             have_been_receiver = true;
         }
-        if (rc == 0 && num_files_failed > 0) {
+        if (rc == 0 && num_files_sender_failed > 0) {
             ton_error(0, 0, "warning: %lld of %lld files were not sent%s",
-                    num_files_failed, total_files_to_send,
+                    num_files_sender_failed, total_files_to_send,
                     is_sender ? " to receiver" : " to us");
+            failed = true;
+        }
+        if (rc == 0 && num_files_receiver_skipped > 0) {
+            ton_error(0, 0, "warning: %lld of %lld files skipped due to errors. Details above.",
+                    num_files_receiver_skipped, total_files_to_send);
             failed = true;
         }
 
