@@ -1,6 +1,7 @@
 
 CUNIT=${TON_CUNIT}
 
+CC=gcc
 CFLAGS=-Wall -g -DUNIX=1 -std=gnu99 -Wpedantic
 LDFLAGS=-lcrypto -lssl
 
