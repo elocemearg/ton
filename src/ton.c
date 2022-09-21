@@ -1,17 +1,24 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 
 #include "tonpush.h"
 #include "tonpull.h"
-#ifdef TON_UNIT_TESTS
 #include "tontest.h"
-#endif
 #include "utils.h"
 
 int main(int argc, char **argv) {
     char *verb;
     int ret = 0;
+
+#ifdef UNIX
+    /* Ignore SIGPIPE */
+    struct sigaction pipeact;
+    memset(&pipeact, 0, sizeof(pipeact));
+    pipeact.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &pipeact, NULL);
+#endif
 
     ton_sockets_setup();
 
@@ -32,12 +39,7 @@ int main(int argc, char **argv) {
         ret = main_pull(argc - 1, argv + 1);
     }
     else if (!strcmp(verb, "test")) {
-#ifdef TON_UNIT_TESTS
         ret = main_test(argc - 1, argv + 1);
-#else
-        fprintf(stderr, "ton was not compiled with CUnit support.\n");
-        ret = 1;
-#endif
     }
     else {
         fprintf(stderr, "Unknown command %s\nTry \"ton push\" or \"ton pull\".\n", verb);

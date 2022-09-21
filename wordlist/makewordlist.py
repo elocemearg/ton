@@ -11,7 +11,6 @@ print("""
  */
 
 #include <stdlib.h>
-#include "wordlist.h"
 
 static const char *words[] = {""")
 

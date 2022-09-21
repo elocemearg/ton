@@ -1,4 +1,3 @@
-generatedwordlist.c
-tttaccepttest
-tttdiscovertest
-ttt
+wordlist/generatedwordlist.c
+ton
+*.o

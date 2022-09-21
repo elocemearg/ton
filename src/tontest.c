@@ -1,4 +1,3 @@
-
 #ifdef TON_UNIT_TESTS
 
 #include <stdlib.h>
@@ -45,6 +44,16 @@ int main_test(int argc, char **argv) {
     CU_cleanup_registry();
 
     return exit_status;
+}
+
+#else
+
+#include <stdlib.h>
+#include <stdio.h>
+
+int main_test(int argc, char **argv) {
+    fprintf(stderr, "ton was compiled without CUnit support.\n");
+    return 1;
 }
 
 #endif
