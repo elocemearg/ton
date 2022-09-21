@@ -32,9 +32,9 @@
 #include <errno.h>
 #endif
 
-static struct ttt_netif *
-ttt_netif_new(void) {
-    struct ttt_netif *iface = malloc(sizeof(struct ttt_netif));
+static struct ton_netif *
+ton_netif_new(void) {
+    struct ton_netif *iface = malloc(sizeof(struct ton_netif));
     if (iface == NULL) {
         return NULL;
     }
@@ -44,8 +44,8 @@ ttt_netif_new(void) {
 }
 
 void
-ttt_netif_list_free(struct ttt_netif *list, bool close_sockets) {
-    struct ttt_netif *cur, *next;
+ton_netif_list_free(struct ton_netif *list, bool close_sockets) {
+    struct ton_netif *cur, *next;
     for (cur = list; cur != NULL; cur = next) {
         next = cur->next;
         if (cur->sock >= 0) {
@@ -60,8 +60,8 @@ ttt_netif_list_free(struct ttt_netif *list, bool close_sockets) {
  * (fc00::/7) then the others. */
 static int
 netif_fam_addr_cmp(const void *v1, const void *v2) {
-    const struct ttt_netif *n1 = *(const struct ttt_netif **) v1;
-    const struct ttt_netif *n2 = *(const struct ttt_netif **) v2;
+    const struct ton_netif *n1 = *(const struct ton_netif **) v1;
+    const struct ton_netif *n2 = *(const struct ton_netif **) v2;
     if (n1->family < n2->family)
         return 1;
     else if (n1->family > n2->family)
@@ -83,29 +83,29 @@ netif_fam_addr_cmp(const void *v1, const void *v2) {
 }
 
 static void
-netif_list_sort(struct ttt_netif **first, struct ttt_netif **last) {
-    struct ttt_netif **array = NULL;
-    struct ttt_netif *prev;
+netif_list_sort(struct ton_netif **first, struct ton_netif **last) {
+    struct ton_netif **array = NULL;
+    struct ton_netif *prev;
     int count = 0;
     int pos = 0;
 
     /* Count how many elements are in the list, and if there are fewer than
      * two, it's already sorted */
-    for (struct ttt_netif *i = *first; i; i = i->next) {
+    for (struct ton_netif *i = *first; i; i = i->next) {
         count++;
     }
     if (count < 2)
         return;
 
     /* Allocate an array, one for a pointer to each item */
-    array = malloc(sizeof(struct ttt_netif *) * count);
+    array = malloc(sizeof(struct ton_netif *) * count);
     if (array == NULL) {
-        ttt_error(1, errno, "netif_list_sort: out of memory");
+        ton_error(1, errno, "netif_list_sort: out of memory");
     }
 
     /* Put all the item pointers into an array */
     pos = 0;
-    for (struct ttt_netif *i = *first; i; i = i->next) {
+    for (struct ton_netif *i = *first; i; i = i->next) {
         array[pos++] = i;
     }
 
@@ -130,8 +130,8 @@ netif_list_sort(struct ttt_netif **first, struct ttt_netif **last) {
 }
 
 static void
-netif_remove_duplicates(struct ttt_netif **first, struct ttt_netif **last) {
-    struct ttt_netif *prev, *cur, *next;
+netif_remove_duplicates(struct ton_netif **first, struct ton_netif **last) {
+    struct ton_netif *prev, *cur, *next;
     prev = NULL;
     for (cur = *first; cur; cur = next) {
         next = cur->next;
@@ -140,7 +140,7 @@ netif_remove_duplicates(struct ttt_netif **first, struct ttt_netif **last) {
              * from the list */
             prev->next = next;
             cur->next = NULL;
-            ttt_netif_list_free(cur, true);
+            ton_netif_list_free(cur, true);
         }
         else {
             prev = cur;
@@ -179,12 +179,12 @@ is_address_private(struct sockaddr *addr) {
 }
 
 #ifdef UNIX
-static struct ttt_netif *
+static struct ton_netif *
 get_if_addrs(int address_families_flags, unsigned int required_iff_flags, bool include_global) {
     struct ifaddrs *ifs = NULL;
     int rc = 0;
-    struct ttt_netif *first = NULL;
-    struct ttt_netif *last = NULL;
+    struct ton_netif *first = NULL;
+    struct ton_netif *last = NULL;
     int sock = -1;
     struct addrinfo *ipv6_bcast = NULL;
     struct addrinfo hints;
@@ -206,14 +206,14 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, bool i
     hints.ai_flags = AI_PASSIVE;
     rc = getaddrinfo("ff02::1", NULL, &hints, &ipv6_bcast);
     if (rc != 0) {
-        ttt_error(0, 0, "getaddrinfo() failed on IPv6 address ff02::1: %s", gai_strerror(rc));
+        ton_error(0, 0, "getaddrinfo() failed on IPv6 address ff02::1: %s", gai_strerror(rc));
     }
 
     /* Get a socket so we can use ioctls - we won't use it to connect
      * to anything. */
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
-        ttt_socket_error(0, "socket");
+        ton_socket_error(0, "socket");
         goto fail;
     }
 
@@ -223,11 +223,11 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, bool i
          * where that address family is requested in address_families_flags. */
         if ((iface->ifa_flags & required_iff_flags) == required_iff_flags &&
                 iface->ifa_addr != NULL &&
-                ((iface->ifa_addr->sa_family == AF_INET && (address_families_flags & TTT_IPV4) != 0) ||
-                 (iface->ifa_addr->sa_family == AF_INET6 && (address_families_flags & TTT_IPV6) != 0)) &&
+                ((iface->ifa_addr->sa_family == AF_INET && (address_families_flags & TON_IPV4) != 0) ||
+                 (iface->ifa_addr->sa_family == AF_INET6 && (address_families_flags & TON_IPV6) != 0)) &&
                 (include_global || is_address_private(iface->ifa_addr))) {
             struct ifreq ifreq;
-            struct ttt_netif *netif = ttt_netif_new();
+            struct ton_netif *netif = ton_netif_new();
             int socklen;
 
             /* Populate netif with the information in iface */
@@ -263,8 +263,8 @@ get_if_addrs(int address_families_flags, unsigned int required_iff_flags, bool i
 
             rc = ioctl(sock, SIOCGIFINDEX, &ifreq);
             if (rc != 0) {
-                ttt_error(0, errno, "ioctl SIOCGIFINDEX %s", iface->ifa_name);
-                ttt_netif_list_free(netif, false);
+                ton_error(0, errno, "ioctl SIOCGIFINDEX %s", iface->ifa_name);
+                ton_netif_list_free(netif, false);
             }
             else {
                 netif->if_index_ipv4 = ifreq.ifr_ifindex;
@@ -297,19 +297,19 @@ end:
     return first;
 
 fail:
-    ttt_netif_list_free(first, false);
+    ton_netif_list_free(first, false);
     first = NULL;
     last = NULL;
     goto end;
 }
 
-struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, bool include_global) {
+struct ton_netif *
+ton_get_multicast_ifs(int address_families_flags, bool include_global) {
     return get_if_addrs(address_families_flags, IFF_MULTICAST | IFF_UP, include_global);
 }
 
-struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, bool include_global) {
+struct ton_netif *
+ton_get_broadcast_ifs(int address_families_flags, bool include_global) {
     /* IPv6 disabled for now until we can listen on both IPv4 and IPv6 */
     return get_if_addrs(address_families_flags, IFF_BROADCAST | IFF_UP, include_global);
 }
@@ -328,12 +328,12 @@ is_useful_interface(IP_ADAPTER_ADDRESSES *addr, bool multicast_only) {
     return 1;
 }
 
-static struct ttt_netif *
+static struct ton_netif *
 get_if_addrs(int address_families_flags, bool multicast_only, bool include_global) {
     IP_ADAPTER_ADDRESSES *addrs = NULL;
     ULONG addrs_size;
     ULONG ret;
-    struct ttt_netif *first = NULL, *last = NULL;
+    struct ton_netif *first = NULL, *last = NULL;
 
     /* Microsoft recommends allocating 15KB and calling GetAdaptersAddress
      * with a progressively larger buffer until it's big enough.
@@ -369,16 +369,16 @@ get_if_addrs(int address_families_flags, bool multicast_only, bool include_globa
              * may be more than one, and they may be different address
              * families. */
             for (PIP_ADAPTER_UNICAST_ADDRESS ua = addr->FirstUnicastAddress; ua != NULL; ua = ua->Next) {
-                struct ttt_netif *netif;
+                struct ton_netif *netif;
 
                 /* Check that the address family for this interface is
                  * compatible with the address families we're accepting... */
                 if (ua->Address.lpSockaddr->sa_family == AF_INET) {
-                    if ((address_families_flags & TTT_IPV4) == 0)
+                    if ((address_families_flags & TON_IPV4) == 0)
                         continue;
                 }
                 else if (ua->Address.lpSockaddr->sa_family == AF_INET6) {
-                    if ((address_families_flags & TTT_IPV6) == 0)
+                    if ((address_families_flags & TON_IPV6) == 0)
                         continue;
                 }
                 else {
@@ -393,7 +393,7 @@ get_if_addrs(int address_families_flags, bool multicast_only, bool include_globa
 
                 /* If we get here, then this address of this interface is of
                  * interest to us. Add it to the list of items we'll return. */
-                netif = ttt_netif_new();
+                netif = ton_netif_new();
                 netif->family = ua->Address.lpSockaddr->sa_family;
                 netif->if_addr_len = ua->Address.iSockaddrLength;
                 memcpy(&netif->if_addr, ua->Address.lpSockaddr, netif->if_addr_len);
@@ -425,13 +425,13 @@ get_if_addrs(int address_families_flags, bool multicast_only, bool include_globa
     return first;
 }
 
-struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, bool include_global) {
+struct ton_netif *
+ton_get_multicast_ifs(int address_families_flags, bool include_global) {
     return get_if_addrs(address_families_flags, true, include_global);
 }
 
-struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, bool include_global) {
+struct ton_netif *
+ton_get_broadcast_ifs(int address_families_flags, bool include_global) {
     /* Only using multicast on Windows currently */
     return NULL;
 }
@@ -439,7 +439,7 @@ ttt_get_broadcast_ifs(int address_families_flags, bool include_global) {
 
 /* List of multicast interface addresses. We populate this the first time
  * multicast_interfaces_subscribe() is called. */
-static struct ttt_netif *multicast_ifs = NULL;
+static struct ton_netif *multicast_ifs = NULL;
 
 /* Subscribe or unsubscribe all multicast-enabled interfaces to/from
  * multicast_addr_str on the given socket. */
@@ -449,7 +449,7 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
     struct addrinfo *multicast_addr = NULL;
     int num_multicast_succeeded = 0;
     int rc;
-    struct ttt_netif *prev;
+    struct ton_netif *prev;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -458,12 +458,12 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
 
     rc = getaddrinfo(multicast_addr_str, NULL, &hints, &multicast_addr);
     if (rc != 0) {
-        ttt_error(0, 0, "getaddrinfo: %s: %s", multicast_addr_str, gai_strerror(rc));
+        ton_error(0, 0, "getaddrinfo: %s: %s", multicast_addr_str, gai_strerror(rc));
         return -1;
     }
 
     if (multicast_addr->ai_family != AF_INET && multicast_addr->ai_family != AF_INET6) {
-        ttt_error(0, 0, "Multicast group address %s not recognised as IPv4 or IPv6 (ai_family %d)", multicast_addr_str, multicast_addr->ai_family);
+        ton_error(0, 0, "Multicast group address %s not recognised as IPv4 or IPv6 (ai_family %d)", multicast_addr_str, multicast_addr->ai_family);
         freeaddrinfo(multicast_addr);
         return -1;
     }
@@ -472,14 +472,14 @@ multicast_interfaces_change_membership(int sock, const char *multicast_addr_str,
         errno = 0;
         /* This list will stick globally, so get both IPv4 and IPv6 interfaces
          * regardless of what family multicast_addr is. */
-        multicast_ifs = ttt_get_multicast_ifs(TTT_IP_BOTH, 1);
+        multicast_ifs = ton_get_multicast_ifs(TON_IP_BOTH, 1);
         if (multicast_ifs == NULL && errno != 0) {
-            ttt_error(0, errno, "failed to get list of multicast interfaces");
+            ton_error(0, errno, "failed to get list of multicast interfaces");
         }
     }
 
     prev = NULL;
-    for (struct ttt_netif *netif = multicast_ifs; netif; netif = netif->next) {
+    for (struct ton_netif *netif = multicast_ifs; netif; netif = netif->next) {
         if (!include_global && !is_address_private((struct sockaddr *) &netif->if_addr)) {
             continue;
         }
@@ -530,7 +530,7 @@ multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str) {
 
 /*****************************************************************************/
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <CUnit/CUnit.h>
 
@@ -547,7 +547,7 @@ address_from_string(const char *str, struct sockaddr_storage *addr, socklen_t *a
 
     rc = getaddrinfo(str, NULL, &hints, &res);
     if (rc != 0) {
-        ttt_error(1, 0, "%s: %s", str, gai_strerror(rc));
+        ton_error(1, 0, "%s: %s", str, gai_strerror(rc));
     }
 
     *addr_len = res->ai_addrlen;
@@ -637,11 +637,11 @@ test_is_address_private(void) {
     }
 }
 
-/* Allocate and return a struct ttt_netif object with the given interface
+/* Allocate and return a struct ton_netif object with the given interface
  * address and interface index, for testing purposes. */
-static struct ttt_netif *
+static struct ton_netif *
 make_simple_netif(const char *addr_str, int if_index) {
-    struct ttt_netif *netif = ttt_netif_new();
+    struct ton_netif *netif = ton_netif_new();
     int rc;
     struct addrinfo hints;
     struct addrinfo *res;
@@ -653,7 +653,7 @@ make_simple_netif(const char *addr_str, int if_index) {
 
     rc = getaddrinfo(addr_str, NULL, &hints, &res);
     if (rc != 0) {
-        ttt_error(1, 0, "%s: %s", addr_str, gai_strerror(rc));
+        ton_error(1, 0, "%s: %s", addr_str, gai_strerror(rc));
     }
 
     netif->family = res->ai_family;
@@ -676,9 +676,9 @@ make_simple_netif(const char *addr_str, int if_index) {
 
 static void
 test_netif_list_sort(void) {
-    struct ttt_netif *first, *last;
+    struct ton_netif *first, *last;
     int idx;
-    struct ttt_netif *list[] = {
+    struct ton_netif *list[] = {
         make_simple_netif("192.168.1.4", 0),
         make_simple_netif("fe80:abcd:ef01::1", 2),
         make_simple_netif("10.0.0.42", 1),
@@ -718,7 +718,7 @@ test_netif_list_sort(void) {
     /* Check that the sort and dedupe has left the correct netif objects
      * and in the correct order. */
     idx = 0;
-    for (struct ttt_netif *iface = first; iface; iface = iface->next) {
+    for (struct ton_netif *iface = first; iface; iface = iface->next) {
         const char *expected_address = expected_addresses[idx];
         if (expected_address == NULL) {
             CU_FAIL("netif_remove_duplicates() left a longer list than expected");
@@ -730,7 +730,7 @@ test_netif_list_sort(void) {
                     sizeof(observed_address), NULL, 0,
                     NI_NUMERICHOST | NI_NUMERICSERV);
             if (rc != 0) {
-                ttt_error(1, 0, "getnameinfo (index %d): %s", idx, gai_strerror(rc));
+                ton_error(1, 0, "getnameinfo (index %d): %s", idx, gai_strerror(rc));
             }
             if (strcmp(observed_address, expected_address) != 0) {
                 fprintf(stderr, "test_netif_list_sort: idx %d: expected %s, observed %s\n", idx, expected_address, observed_address);
@@ -744,11 +744,11 @@ test_netif_list_sort(void) {
     /* Free the temporary netif objects left in the list. Don't free all
      * elements of "list" because some of those were removed and freed by
      * netif_remove_duplicates(). */
-    ttt_netif_list_free(first, false);
+    ton_netif_list_free(first, false);
 }
 
 CU_ErrorCode
-ttt_netif_register_tests(void) {
+ton_netif_register_tests(void) {
     CU_TestInfo tests[] = {
         { "is_address_private", test_is_address_private },
         { "netif_list_sort", test_netif_list_sort },

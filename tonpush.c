@@ -61,10 +61,10 @@ static const struct option longopts[] = {
 static void
 print_help(FILE *f) {
     fprintf(f,
-"ttt push: send a set of files or directories over TTT\n"
+"ton push: send a set of files or directories over the network\n"
 "\n"
 "Usage:\n"
-"    ttt push [options] files...\n"
+"    ton push [options] files...\n"
 "Options:\n"
 "    -4, --ipv4               Use IPv4 only, not IPv6\n"
 "    -6, --ipv6               Use IPv6 only, not IPv4\n"
@@ -87,7 +87,7 @@ print_help(FILE *f) {
 "    -w, --words <count>      Generate passphrase of <count> words (default 4)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4, TTT_MULTICAST_GROUP_IPV6);
+        TON_DEFAULT_DISCOVER_PORT, TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
 }
 
 
@@ -96,9 +96,9 @@ report_generated_passphrase(const char *passphrase) {
     if (passphrase != NULL) {
         /* Tell the user what passphrase we generated.
          * If we generated the passphrase rather than having it specified by
-         * the user, then we asked ttt_discover_and_connect to pass our
+         * the user, then we asked ton_discover_and_connect to pass our
          * passphrase as the cookie. */
-        fprintf(stderr, "On the destination host, run:\n    ttt pull\nand enter this passphrase:\n");
+        fprintf(stderr, "On the destination host, run:\n    ton pull\nand enter this passphrase:\n");
         fprintf(stderr, "    %s\n", passphrase);
     }
 }
@@ -126,7 +126,7 @@ received_announcement_callback(void *cookie, const struct sockaddr *addr,
         rc = getnameinfo(addr, addr_len, peer_addr_str, sizeof(peer_addr_str),
                 peer_port_str, sizeof(peer_port_str), NI_NUMERICHOST | NI_NUMERICSERV);
         if (rc != 0) {
-            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+            ton_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
         }
         if (valid) {
             fprintf(stderr, "Found %s, attempting connection to port %d...\n", peer_addr_str, invitation_port);
@@ -149,7 +149,7 @@ main_push(int argc, char **argv) {
     int exit_status = 0;
     int verbose = 0;
     bool quiet = false;
-    struct ttt_session sess;
+    struct ton_session sess;
     bool sess_valid = false;
     bool send_full_metadata = false;
     char peer_addr[256] = "";
@@ -160,7 +160,7 @@ main_push(int argc, char **argv) {
     bool prompt_for_passphrase = 0;
     bool hide_passphrase = 0;
     double connect_timeout_sec = 0;
-    struct ttt_discover_options opts;
+    struct ton_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "hqvt:w:46", longopts, NULL)) != -1) {
         switch (c) {
@@ -171,7 +171,7 @@ main_push(int argc, char **argv) {
             case PUSH_DISCOVER_PORT:
                 discover_port = atoi(optarg);
                 if (discover_port == 0 || discover_port > 65535) {
-                    ttt_error(1, 0, "--discover-port: port number must be between 1 and 65535");
+                    ton_error(1, 0, "--discover-port: port number must be between 1 and 65535");
                 }
                 break;
 
@@ -195,12 +195,12 @@ main_push(int argc, char **argv) {
 
             case '4':
             case PUSH_IPV4:
-                address_families |= TTT_IPV4;
+                address_families |= TON_IPV4;
                 break;
 
             case '6':
             case PUSH_IPV6:
-                address_families |= TTT_IPV6;
+                address_families |= TON_IPV6;
                 break;
 
             case PUSH_INCLUDE_GLOBAL:
@@ -219,10 +219,10 @@ main_push(int argc, char **argv) {
             case PUSH_TIMEOUT:
                 connect_timeout_sec = parse_double_or_exit(optarg, "--timeout");
                 if (connect_timeout_sec < 0) {
-                    ttt_error(1, 0, "--timeout: argument must not be negative");
+                    ton_error(1, 0, "--timeout: argument must not be negative");
                 }
                 if (connect_timeout_sec > INT_MAX / 1000) {
-                    ttt_error(1, 0, "--timeout: value is too large (max is %d)", INT_MAX / 1000);
+                    ton_error(1, 0, "--timeout: value is too large (max is %d)", INT_MAX / 1000);
                 }
                 break;
 
@@ -246,12 +246,12 @@ main_push(int argc, char **argv) {
     }
 
     if (optind >= argc) {
-        fprintf(stderr, "Usage is:\n    ttt push [options] <filename> ...\nUse -h for help.\n");
+        fprintf(stderr, "Usage is:\n    ton push [options] <filename> ...\nUse -h for help.\n");
         exit(1);
     }
 
     if (address_families == 0) {
-        address_families = TTT_IP_BOTH;
+        address_families = TON_IP_BOTH;
     }
 
     files_to_push = argv + optind;
@@ -261,7 +261,7 @@ main_push(int argc, char **argv) {
      * "-" is a special case meaning stdin. */
     for (int i = 0; i < num_files_to_push; ++i) {
         if (strcmp(files_to_push[i], "-") != 0 && access(files_to_push[i], F_OK) != 0) {
-            ttt_error(0, errno, "%s", files_to_push[i]);
+            ton_error(0, errno, "%s", files_to_push[i]);
             exit_status = 1;
         }
     }
@@ -272,59 +272,59 @@ main_push(int argc, char **argv) {
     /* If we haven't been given a passphrase, generate or prompt for one. */
     if (passphrase == NULL) {
         if (prompt_for_passphrase) {
-            passphrase = ttt_prompt_passphrase("Choose a passphrase: ", hide_passphrase);
+            passphrase = ton_prompt_passphrase("Choose a passphrase: ", hide_passphrase);
             if (hide_passphrase) {
                 char *confirmed;
-                confirmed = ttt_prompt_passphrase("Confirm passphrase: ", hide_passphrase);
+                confirmed = ton_prompt_passphrase("Confirm passphrase: ", hide_passphrase);
                 if (strcmp(passphrase, confirmed)) {
-                    ttt_error(1, 0, "passphrase and confirmation did not match");
+                    ton_error(1, 0, "passphrase and confirmation did not match");
                 }
                 free(confirmed);
             }
         }
         else {
-            passphrase = ttt_generate_passphrase(passphrase_word_count);
+            passphrase = ton_generate_passphrase(passphrase_word_count);
             if (passphrase == NULL) {
-                ttt_error(1, 0, "failed to generate passphrase");
+                ton_error(1, 0, "failed to generate passphrase");
             }
             generated_passphrase = 1;
         }
     }
 
-    ttt_discover_options_init(&opts, passphrase, strlen(passphrase));
+    ton_discover_options_init(&opts, passphrase, strlen(passphrase));
     if (multicast_address_ipv4)
-        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
+        ton_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
     if (multicast_address_ipv6)
-        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv6);
-    ttt_discover_set_address_families(&opts, address_families);
-    ttt_discover_set_discover_port(&opts, discover_port);
-    ttt_discover_set_verbose(&opts, verbose);
-    ttt_discover_set_listening_callback(&opts,
+        ton_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv6);
+    ton_discover_set_address_families(&opts, address_families);
+    ton_discover_set_discover_port(&opts, discover_port);
+    ton_discover_set_verbose(&opts, verbose);
+    ton_discover_set_listening_callback(&opts,
             quiet ? quiet_listening_callback : listening_callback,
             generated_passphrase ? passphrase : NULL);
-    ttt_discover_set_include_global_addresses(&opts, include_global);
-    ttt_discover_set_connect_timeout(&opts, (int)(connect_timeout_sec * 1000));
+    ton_discover_set_include_global_addresses(&opts, include_global);
+    ton_discover_set_connect_timeout(&opts, (int)(connect_timeout_sec * 1000));
     if (!quiet) {
-        ttt_discover_set_received_announcement_callback(&opts,
+        ton_discover_set_received_announcement_callback(&opts,
                 received_announcement_callback, &verbose);
     }
 
     /* Discover the other endpoint on our network with our passphrase, and
      * connect to it. */
-    if (ttt_discover_and_connect(&opts, &sess) == 0) {
+    if (ton_discover_and_connect(&opts, &sess) == 0) {
         sess_valid = true;
     }
     else {
-        ttt_error(0, 0, "failed to establish connection");
+        ton_error(0, 0, "failed to establish connection");
         exit_status = 1;
     }
 
     if (sess_valid) {
-        struct ttt_file_transfer ctx;
+        struct ton_file_transfer ctx;
 
         if (!quiet) {
             /* Tell the user we successfully found the other endpoint */
-            if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+            if (ton_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
                 fprintf(stderr, "Established connection.\n");
             }
             else {
@@ -333,20 +333,20 @@ main_push(int argc, char **argv) {
         }
 
         /* Set up the file transfer session as sender */
-        ttt_file_transfer_init_sender(&ctx, (const char **) files_to_push, num_files_to_push);
-        ttt_file_transfer_set_send_full_metadata(&ctx, send_full_metadata);
+        ton_file_transfer_init_sender(&ctx, (const char **) files_to_push, num_files_to_push);
+        ton_file_transfer_set_send_full_metadata(&ctx, send_full_metadata);
 
         if (quiet) {
-            ttt_file_transfer_set_progress_callback(&ctx, NULL);
+            ton_file_transfer_set_progress_callback(&ctx, NULL);
         }
 
         /* Run the file transfer session and send our files */
-        exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);
-        ttt_session_destroy(&sess);
-        ttt_file_transfer_destroy(&ctx);
+        exit_status = (ton_file_transfer_session(&ctx, &sess) != 0);
+        ton_session_destroy(&sess);
+        ton_file_transfer_destroy(&ctx);
     }
 
-    ttt_discover_options_destroy(&opts);
+    ton_discover_options_destroy(&opts);
 
     free(passphrase);
 

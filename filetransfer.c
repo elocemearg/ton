@@ -1,4 +1,4 @@
-/* Code for doing the actual file transfer once a session (struct ttt_session)
+/* Code for doing the actual file transfer once a session (struct ton_session)
  * has been established. This code sends messages defined in protocol.c. */
 
 #include <stdlib.h>
@@ -21,18 +21,18 @@
 #include "localfs.h"
 
 /* Enable random failures for testing */
-static int ttt_random_file_open_failures = 0;
-static int ttt_random_file_read_failures = 0;
-static int ttt_random_file_write_failures = 0;
+static int ton_random_file_open_failures = 0;
+static int ton_random_file_read_failures = 0;
+static int ton_random_file_write_failures = 0;
 
 /* Join two path fragments together, inserting DIR_SEP between them if there
  * is no DIR_SEP at the end of path1 nor the start of path2. Write the joined
  * path to dest.
- * dest must point to at least (ttt_lf_len(path1) + ttt_lf_len(path2) + 2) * ttt_lf_char_size() bytes. */
+ * dest must point to at least (ton_lf_len(path1) + ton_lf_len(path2) + 2) * ton_lf_char_size() bytes. */
 static void
-join_paths(const TTT_LF_CHAR *path1, const TTT_LF_CHAR *path2, TTT_LF_CHAR *dest) {
+join_paths(const TON_LF_CHAR *path1, const TON_LF_CHAR *path2, TON_LF_CHAR *dest) {
     /* Decide whether we need to put a directory separator between these */
-    size_t path1_len = ttt_lf_len(path1);
+    size_t path1_len = ton_lf_len(path1);
     bool add_sep;
 
     if (path1[0] == '\0' || path2[0] == '\0') {
@@ -48,33 +48,33 @@ join_paths(const TTT_LF_CHAR *path1, const TTT_LF_CHAR *path2, TTT_LF_CHAR *dest
         }
     }
 
-    ttt_lf_copy(dest, path1);
+    ton_lf_copy(dest, path1);
     if (add_sep)
-        ttt_lf_copy(dest + ttt_lf_len(dest), DIR_SEP_STR);
-    ttt_lf_copy(dest + ttt_lf_len(dest), path2);
+        ton_lf_copy(dest + ton_lf_len(dest), DIR_SEP_STR);
+    ton_lf_copy(dest + ton_lf_len(dest), path2);
 }
 
 #ifdef WINDOWS
 /* Windows only: determine whether a path ends with a given ending,
  * case-insensitively. */
 static int
-ends_with_icase(TTT_LF_CHAR *path, TTT_LF_CHAR *ending) {
-    size_t len = ttt_lf_len(path);
-    if (len < ttt_lf_len(ending))
+ends_with_icase(TON_LF_CHAR *path, TON_LF_CHAR *ending) {
+    size_t len = ton_lf_len(path);
+    if (len < ton_lf_len(ending))
         return 0;
-    if (!ttt_lf_casecmp(path + len - ttt_lf_len(ending), ending))
+    if (!ton_lf_casecmp(path + len - ton_lf_len(ending), ending))
         return 1;
     else
         return 0;
 }
 #endif
 
-static TTT_LF_CHAR *
-alloc_real_path_name(const TTT_LF_CHAR *path) {
-    TTT_LF_CHAR *real_path_name;
+static TON_LF_CHAR *
+alloc_real_path_name(const TON_LF_CHAR *path) {
+    TON_LF_CHAR *real_path_name;
     size_t len;
 
-    real_path_name = ttt_realpath(path);
+    real_path_name = ton_realpath(path);
     if (real_path_name == NULL)
         return NULL;
 
@@ -92,7 +92,7 @@ alloc_real_path_name(const TTT_LF_CHAR *path) {
      * relative path ("D:my\relative\path") because _fullpath() above has
      * given us an absolute path.
      */
-    len = ttt_lf_len(real_path_name);
+    len = ton_lf_len(real_path_name);
     while (len > 1 && real_path_name[len - 1] == DIR_SEP) {
 #ifdef WINDOWS
         if (real_path_name[len - 2] == ':')
@@ -105,14 +105,14 @@ alloc_real_path_name(const TTT_LF_CHAR *path) {
 
 
 static int
-ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
-        int (*callback)(void *cookie, TTT_LF_CHAR *file_path,
-            TTT_STAT *st, int orig_path_start),
+ton_dir_walk_aux(TON_LF_CHAR *path, int orig_path_start,
+        int (*callback)(void *cookie, TON_LF_CHAR *file_path,
+            TON_STAT *st, int orig_path_start),
         void *cookie) {
     int ret = 0;
-    TTT_STAT st;
-    if (ttt_stat(path, &st) < 0) {
-        ttt_error(0, errno, "skipping " TTT_LF_PRINTF ": stat failed", path);
+    TON_STAT st;
+    if (ton_stat(path, &st) < 0) {
+        ton_error(0, errno, "skipping " TON_LF_PRINTF ": stat failed", path);
         return 1;
     }
 
@@ -123,40 +123,40 @@ ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
 
     if (S_ISDIR(st.st_mode)) {
         /* This is a directory. Recursively walk each of its children. */
-        TTT_LF_CHAR *new_path = NULL;
-        TTT_DIR_HANDLE dir = ttt_opendir(path);
-        TTT_DIR_ENTRY ent = NULL;
+        TON_LF_CHAR *new_path = NULL;
+        TON_DIR_HANDLE dir = ton_opendir(path);
+        TON_DIR_ENTRY ent = NULL;
         long num_entries_in_dir = 0;
         int subret;
 
         if (dir == NULL) {
-            ttt_error(0, errno, "skipping directory " TTT_LF_PRINTF, path);
+            ton_error(0, errno, "skipping directory " TON_LF_PRINTF, path);
             return 1;
         }
 
-        new_path = malloc((ttt_lf_len(path) + 1 + MAX_PATH_COMPONENT_LEN + 1) * ttt_lf_char_size());
+        new_path = malloc((ton_lf_len(path) + 1 + MAX_PATH_COMPONENT_LEN + 1) * ton_lf_char_size());
         if (new_path == NULL) {
-            ttt_error(0, errno, "malloc");
+            ton_error(0, errno, "malloc");
             ret = -1;
         }
         errno = 0;
-        while (ret >= 0 && (ent = ttt_readdir(dir)) != NULL) {
-            if (!ttt_lf_cmp(ent->d_name, TTT_LF_CURRENT_DIR) ||
-                    !ttt_lf_cmp(ent->d_name, TTT_LF_PARENT_DIR))
+        while (ret >= 0 && (ent = ton_readdir(dir)) != NULL) {
+            if (!ton_lf_cmp(ent->d_name, TON_LF_CURRENT_DIR) ||
+                    !ton_lf_cmp(ent->d_name, TON_LF_PARENT_DIR))
                 continue;
 #ifdef WINDOWS
             /* Skip Windows shortcuts */
             if (ends_with_icase(ent->d_name, L".lnk"))
                 continue;
 #endif
-            if (ttt_lf_len(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
-                ttt_error(0, 0, "can't open " TTT_LF_PRINTF "/" TTT_LF_PRINTF ": subdirectory name too long", path, ent->d_name);
+            if (ton_lf_len(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
+                ton_error(0, 0, "can't open " TON_LF_PRINTF "/" TON_LF_PRINTF ": subdirectory name too long", path, ent->d_name);
                 ret = 1;
                 continue;
             }
             join_paths(path, ent->d_name, new_path);
 
-            subret = ttt_dir_walk_aux(new_path, orig_path_start, callback, cookie);
+            subret = ton_dir_walk_aux(new_path, orig_path_start, callback, cookie);
             if (subret > 0) {
                 ret = subret;
             }
@@ -173,15 +173,15 @@ ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
                 /* If we failed to read the first entry, then just skip this
                  * directory, write a warning, and continue. Sometimes this
                  * happens with phantom hidden directories on Windows. */
-                ttt_error(0, errno, "skipping directory " TTT_LF_PRINTF ", failed to read contents", path);
+                ton_error(0, errno, "skipping directory " TON_LF_PRINTF ", failed to read contents", path);
                 ret = 1;
             }
             else {
-                ttt_error(0, errno, "error reading directory entries in " TTT_LF_PRINTF, path);
+                ton_error(0, errno, "error reading directory entries in " TON_LF_PRINTF, path);
                 ret = -1;
             }
         }
-        ttt_closedir(dir);
+        ton_closedir(dir);
 
         /* Finally, add an entry for the directory itself.
          * We add this last because the receiving end must set the directory's
@@ -216,17 +216,17 @@ ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
  * The callback should return 0 normally, or -1 to terminate the walk with
  * an error. Its parameters are:
  *     void *cookie
- *         The cookie argument to ttt_dir_walk_aux. This has meaning
+ *         The cookie argument to ton_dir_walk_aux. This has meaning
  *         only to the callback.
  *     char *file_path
- *         The path to the file we found. In ttt_dir_walk_aux(), whatever
+ *         The path to the file we found. In ton_dir_walk_aux(), whatever
  *         level of recursion depth, this always begins with the file_path
- *         originally passed to the top-level ttt_dir_walk().
- *     TTT_STAT *st
+ *         originally passed to the top-level ton_dir_walk().
+ *     TON_STAT *st
  *         File metadata in the form of a struct stat or struct __stat64.
  *     int orig_path_start
  *         Offset in bytes from the start of path, pointing to the start of
- *         the last component of the initial path supplied to ttt_dir_walk().
+ *         the last component of the initial path supplied to ton_dir_walk().
  *         For example, if the initial path was "foo/bar/baz", orig_path_start
  *         is 8, pointing to the start of "baz". Trailing slashes are ignored,
  *         so if the initial path was "foo/bar/baz/", orig_path_start would
@@ -235,15 +235,15 @@ ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
  * Return value is 0 on success, 1 if some files could not be statted, or -1
  * if there was a fatal error. */
 static int
-ttt_dir_walk(TTT_LF_CHAR *path,
-        int (*callback)(void *cookie, TTT_LF_CHAR *file_path,
-            TTT_STAT *st, int orig_path_start),
+ton_dir_walk(TON_LF_CHAR *path,
+        int (*callback)(void *cookie, TON_LF_CHAR *file_path,
+            TON_STAT *st, int orig_path_start),
         void *cookie) {
     int rc;
     int pos;
-    TTT_LF_CHAR *full_path = alloc_real_path_name(path);
+    TON_LF_CHAR *full_path = alloc_real_path_name(path);
     if (full_path == NULL) {
-        ttt_error(0, errno, TTT_LF_PRINTF, path);
+        ton_error(0, errno, TON_LF_PRINTF, path);
         return -1;
     }
 
@@ -252,7 +252,7 @@ ttt_dir_walk(TTT_LF_CHAR *path,
      * If full_path is "/", orig_path_start is 1.
      * If full_path is a directory, point orig_path_start to the start of the
      * last directory component of the path. */
-    pos = ttt_lf_len(full_path);
+    pos = ton_lf_len(full_path);
     if (pos > 0)
         --pos;
 
@@ -264,7 +264,7 @@ ttt_dir_walk(TTT_LF_CHAR *path,
     if (full_path[pos] == DIR_SEP)
         pos++;
 
-    rc = ttt_dir_walk_aux(full_path, pos, callback, cookie);
+    rc = ton_dir_walk_aux(full_path, pos, callback, cookie);
 
     free(full_path);
 
@@ -272,10 +272,10 @@ ttt_dir_walk(TTT_LF_CHAR *path,
 }
 
 /*
- * Convert an operating system pathname (path) into a TTT path suitable for
+ * Convert an operating system pathname (path) into a ton path suitable for
  * sending in a file transfer session.
  *
- * The returned TTT path:
+ * The returned ton path:
  *     * has directory components separated by slash ('/') regardless of what
  *       the local operating system's directory separator is, and
  *     * does not begin with a slash.
@@ -284,29 +284,29 @@ ttt_dir_walk(TTT_LF_CHAR *path,
  * responsibility to free() it.
  */
 static char *
-local_path_to_ttt_path(const TTT_LF_CHAR *path) {
-    char *ttt_path;
+local_path_to_ton_path(const TON_LF_CHAR *path) {
+    char *ton_path;
 
     /* Skip any leading slashes */
     while (*path == DIR_SEP)
         path++;
 
     /* Take all the path components after this point. */
-    ttt_path = ttt_lf_to_utf8(path);
-    if (ttt_path == NULL) {
-        ttt_error(0, errno, "strdup");
+    ton_path = ton_lf_to_utf8(path);
+    if (ton_path == NULL) {
+        ton_error(0, errno, "strdup");
         return NULL;
     }
 
     /* Substitute all DIR_SEP characters for '/' */
     if (DIR_SEP != '/') {
-        for (int i = 0; ttt_path[i]; ++i) {
-            if (ttt_path[i] == DIR_SEP) {
-                ttt_path[i] = '/';
+        for (int i = 0; ton_path[i]; ++i) {
+            if (ton_path[i] == DIR_SEP) {
+                ton_path[i] = '/';
             }
         }
     }
-    return ttt_path;
+    return ton_path;
 }
 
 #ifdef WINDOWS
@@ -320,11 +320,11 @@ local_path_to_ttt_path(const TTT_LF_CHAR *path) {
  * Return a pointer to the next directory separator of the possibly-modified
  * string, or a pointer to the string's null-terminator if there is no
  * next directory separator. */
-static TTT_LF_CHAR *
-make_dir_component_legal_on_windows(TTT_LF_CHAR *p) {
+static TON_LF_CHAR *
+make_dir_component_legal_on_windows(TON_LF_CHAR *p) {
     int pos;
     for (pos = 0; p[pos] != '/' && p[pos] != '\0'; ++pos) {
-        TTT_LF_CHAR c = p[pos];
+        TON_LF_CHAR c = p[pos];
         if (c < 32 || wcschr(L"<>:\"\\|?*", c) != NULL) {
             c = '_';
         }
@@ -334,11 +334,11 @@ make_dir_component_legal_on_windows(TTT_LF_CHAR *p) {
 }
 #endif
 
-/* Convert a path received over a TTT file transfer session to a local
- * path name. It is the opposite of local_path_to_ttt_path(). If the resulting
+/* Convert a path received over a ton file transfer session to a local
+ * path name. It is the opposite of local_path_to_ton_path(). If the resulting
  * local filename would be illegal, make it legal.
  *
- * path: the TTT path to convert, which must use slashes as delimiters and
+ * path: the ton path to convert, which must use slashes as delimiters and
  *       not begin with a slash.
  * local_base_dir: the local directory name to prepend to the converted path.
  *
@@ -350,28 +350,28 @@ make_dir_component_legal_on_windows(TTT_LF_CHAR *p) {
  * The returned string is created by malloc() and it is the caller's
  * responsibility to free() it.
  */
-static TTT_LF_CHAR *
-ttt_path_to_local_path(const char *ttt_path, const TTT_LF_CHAR *local_base_dir) {
-    TTT_LF_CHAR *full_path = NULL; /* local_base_dir joined to localised path */
-    TTT_LF_CHAR *localised_path = NULL; /* path with any problematic characters replaced */
+static TON_LF_CHAR *
+ton_path_to_local_path(const char *ton_path, const TON_LF_CHAR *local_base_dir) {
+    TON_LF_CHAR *full_path = NULL; /* local_base_dir joined to localised path */
+    TON_LF_CHAR *localised_path = NULL; /* path with any problematic characters replaced */
 
 #ifdef WINDOWS
-    TTT_LF_CHAR *path_ptr;
+    TON_LF_CHAR *path_ptr;
     int r, w;
 
     /* Skip any leading slashes */
-    while (*ttt_path == '/')
-        ttt_path++;
+    while (*ton_path == '/')
+        ton_path++;
 
-    localised_path = ttt_lf_from_utf8(ttt_path);
+    localised_path = ton_lf_from_utf8(ton_path);
     if (localised_path == NULL) {
         if (errno == ENOMEM) {
-            ttt_error(0, 0, "ttt_path_to_local_path(): out of memory.");
+            ton_error(0, 0, "ton_path_to_local_path(): out of memory.");
         }
         else {
-            ttt_error(0, 0, "ttt_path_to_local_path: internal error: remote "
+            ton_error(0, 0, "ton_path_to_local_path: internal error: remote "
                     "host sent us the filename %s but this isn't valid UTF-8! "
-                    "This is a bug in ttt.", ttt_path);
+                    "This is a bug in ton.", ton_path);
         }
         return NULL;
     }
@@ -381,7 +381,7 @@ ttt_path_to_local_path(const char *ttt_path, const TTT_LF_CHAR *local_base_dir) 
     r = 0;
     w = 0;
     for (; localised_path[r]; r++) {
-        TTT_LF_CHAR c = localised_path[r];
+        TON_LF_CHAR c = localised_path[r];
         if (c != '/' || (r > 0 && localised_path[r - 1] != '/')) {
             localised_path[w++] = c;
         }
@@ -399,13 +399,13 @@ ttt_path_to_local_path(const char *ttt_path, const TTT_LF_CHAR *local_base_dir) 
         }
     }
 #else
-    /* ttt_path is already a valid Unix-style path delimited by slashes. */
-    localised_path = ttt_lf_from_utf8(ttt_path);
+    /* ton_path is already a valid Unix-style path delimited by slashes. */
+    localised_path = ton_lf_from_utf8(ton_path);
     if (localised_path == NULL)
         return NULL;
 #endif
 
-    full_path = malloc((ttt_lf_len(local_base_dir) + 1 + ttt_lf_len(localised_path) + 1) * ttt_lf_char_size());
+    full_path = malloc((ton_lf_len(local_base_dir) + 1 + ton_lf_len(localised_path) + 1) * ton_lf_char_size());
     if (full_path == NULL) {
         free(localised_path);
         return NULL;
@@ -418,66 +418,66 @@ ttt_path_to_local_path(const char *ttt_path, const TTT_LF_CHAR *local_base_dir) 
     return full_path;
 }
 
-/* Functions to create and destroy ttt_file and ttt_file_list objects... */
+/* Functions to create and destroy ton_file and ton_file_list objects... */
 
 static void
-ttt_file_free(struct ttt_file *file) {
+ton_file_free(struct ton_file *file) {
     free(file->local_path);
-    free(file->ttt_path);
+    free(file->ton_path);
     free(file);
 }
 
 static void
-ttt_file_list_init(struct ttt_file_list *list) {
+ton_file_list_init(struct ton_file_list *list) {
     list->start = NULL;
     list->last = NULL;
 }
 
 static void
-ttt_file_list_destroy(struct ttt_file_list *list) {
-    struct ttt_file *cur, *next;
+ton_file_list_destroy(struct ton_file_list *list) {
+    struct ton_file *cur, *next;
     for (cur = list->start; cur != NULL; cur = next) {
         next = cur->next;
-        ttt_file_free(cur);
+        ton_file_free(cur);
     }
     list->start = NULL;
     list->last = NULL;
 }
 
-/* Allocate a new struct ttt_file with the given attributes. Either local_path
- * or ttt_path may be NULL.
+/* Allocate a new struct ton_file with the given attributes. Either local_path
+ * or ton_path may be NULL.
  *
  * local_path: the pathname of this file as our OS knows it.
- * ttt_path: the pathname of this file as we would refer to it in a
- *           TTT_MSG_FILE_METADATA message to a remote host.
+ * ton_path: the pathname of this file as we would refer to it in a
+ *           TON_MSG_FILE_METADATA message to a remote host.
  * mtime: the modified-time of the file, which is a Unix timestamp (seconds
  *        since 1970-01-01 00:00:00).
  * mode: the Unix-style mode bits for the file.
  * size: the size of the file, in bytes. -1 if not known.
  */
-static struct ttt_file *
-ttt_file_new(TTT_LF_CHAR *local_path, const char *ttt_path, time_t mtime,
+static struct ton_file *
+ton_file_new(TON_LF_CHAR *local_path, const char *ton_path, time_t mtime,
         int mode, long long size) {
-    struct ttt_file *f = malloc(sizeof(struct ttt_file));
+    struct ton_file *f = malloc(sizeof(struct ton_file));
     if (f == NULL) {
         return NULL;
     }
     memset(f, 0, sizeof(*f));
     if (local_path) {
-        f->local_path = ttt_lf_dup(local_path);
+        f->local_path = ton_lf_dup(local_path);
         if (f->local_path == NULL)
             goto fail;
     }
     else {
         f->local_path = NULL;
     }
-    if (ttt_path) {
-        f->ttt_path = strdup(ttt_path);
-        if (f->ttt_path == NULL)
+    if (ton_path) {
+        f->ton_path = strdup(ton_path);
+        if (f->ton_path == NULL)
             goto fail;
     }
     else {
-        f->ttt_path = NULL;
+        f->ton_path = NULL;
     }
     f->mtime = mtime;
     f->mode = mode;
@@ -487,41 +487,41 @@ ttt_file_new(TTT_LF_CHAR *local_path, const char *ttt_path, time_t mtime,
     return f;
 
 fail:
-    ttt_file_free(f);
+    ton_file_free(f);
     return NULL;
 }
 
-/* ttt_dir_walk() callback function used by ttt_file_transfer_session_sender().
- * Adds a ttt_file object for the named file to a list (=cookie), deriving
- * the ttt_file object's ttt_path fields from path and orig_path_start.
+/* ton_dir_walk() callback function used by ton_file_transfer_session_sender().
+ * Adds a ton_file object for the named file to a list (=cookie), deriving
+ * the ton_file object's ton_path fields from path and orig_path_start.
  * If orig_path_start is -1, the file represents stdin and st is ignored. */
 static int
-add_local_file_to_list(void *cookie, TTT_LF_CHAR *path, TTT_STAT *st, int orig_path_start) {
-    struct ttt_file_list *list = (struct ttt_file_list *) cookie;
-    struct ttt_file *file = NULL;
+add_local_file_to_list(void *cookie, TON_LF_CHAR *path, TON_STAT *st, int orig_path_start) {
+    struct ton_file_list *list = (struct ton_file_list *) cookie;
+    struct ton_file *file = NULL;
 
     if (orig_path_start < 0) {
         /* stdin */
-        file = ttt_file_new(TTT_LF_STDIN, NULL, time(NULL), S_IFREG | 0644, -1);
+        file = ton_file_new(TON_LF_STDIN, NULL, time(NULL), S_IFREG | 0644, -1);
     }
     else {
         /* an actual file */
-        file = ttt_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
+        file = ton_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
     }
     if (file == NULL) {
-        ttt_error(0, errno, "failed to create new file object structure for " TTT_LF_PRINTF, path);
+        ton_error(0, errno, "failed to create new file object structure for " TON_LF_PRINTF, path);
         return -1;
     }
     file->next = NULL;
 
-    if (orig_path_start < 0 && !ttt_lf_cmp(path, TTT_LF_STDIN)) {
-        file->ttt_path = strdup("stdin");
+    if (orig_path_start < 0 && !ton_lf_cmp(path, TON_LF_STDIN)) {
+        file->ton_path = strdup("stdin");
     }
     else {
-        file->ttt_path = local_path_to_ttt_path(path + orig_path_start);
+        file->ton_path = local_path_to_ton_path(path + orig_path_start);
     }
-    if (file->ttt_path == NULL) {
-        ttt_file_free(file);
+    if (file->ton_path == NULL) {
+        ton_file_free(file);
         return -1;
     }
 
@@ -536,24 +536,24 @@ add_local_file_to_list(void *cookie, TTT_LF_CHAR *path, TTT_STAT *st, int orig_p
     return 0;
 }
 
-/* Add a ttt_file with the given properties to the list. This takes a ttt_name
- * as might be received from a remote TTT host.
- * Derive the local_path attribute by the ttt_name given and local_base_dir. */
+/* Add a ton_file with the given properties to the list. This takes a ton_name
+ * as might be received from a remote ton host.
+ * Derive the local_path attribute by the ton_name given and local_base_dir. */
 static int
-add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
-        int mode, const char *ttt_name, const TTT_LF_CHAR *local_base_dir) {
-    struct ttt_file *file = NULL;
+add_ton_file_to_list(struct ton_file_list *list, long long size, time_t mtime,
+        int mode, const char *ton_name, const TON_LF_CHAR *local_base_dir) {
+    struct ton_file *file = NULL;
 
-    file = ttt_file_new(NULL, ttt_name, mtime, mode, size);
+    file = ton_file_new(NULL, ton_name, mtime, mode, size);
     if (file == NULL) {
-        ttt_error(0, errno, "failed to create new file object structure for %s", ttt_name);
+        ton_error(0, errno, "failed to create new file object structure for %s", ton_name);
         return -1;
     }
     file->next = NULL;
 
-    file->local_path = ttt_path_to_local_path(ttt_name, local_base_dir);
+    file->local_path = ton_path_to_local_path(ton_name, local_base_dir);
     if (file->local_path == NULL) {
-        ttt_file_free(file);
+        ton_file_free(file);
         return -1;
     }
 
@@ -568,11 +568,11 @@ add_ttt_file_to_list(struct ttt_file_list *list, long long size, time_t mtime,
     return 0;
 }
 
-/* Read a fixed number of bytes from a ttt_session into buf, blocking until
+/* Read a fixed number of bytes from a ton_session into buf, blocking until
  * we've received exactly that many bytes.
  * Return the number of bytes read if successful, or <=0 on failure. */
 static int
-readall(struct ttt_session *sess, void *buf, int length) {
+readall(struct ton_session *sess, void *buf, int length) {
     size_t bytes_read = 0;
     do {
         int rc = sess->read(sess, (char *) buf + bytes_read, length - bytes_read);
@@ -590,53 +590,53 @@ readall(struct ttt_session *sess, void *buf, int length) {
  * received the complete message. Put the message in *msg.
  * Return 0 on success or nonzero on error. */
 static int
-ttt_msg_recv(struct ttt_session *sess, struct ttt_msg *msg) {
-    unsigned char header[TTT_MSG_HEADER_SIZE];
+ton_msg_recv(struct ton_session *sess, struct ton_msg *msg) {
+    unsigned char header[TON_MSG_HEADER_SIZE];
     int rc;
     int tag, body_length_bytes;
     void *body_dest;
 
     /* Read the header, and fail if that can't be done. */
-    rc = readall(sess, header, TTT_MSG_HEADER_SIZE);
+    rc = readall(sess, header, TON_MSG_HEADER_SIZE);
     if (rc == 0) {
-        ttt_error(0, 0, "connection terminated");
-        return TTT_ERR_EOF;
+        ton_error(0, 0, "connection terminated");
+        return TON_ERR_EOF;
     }
     else if (rc < 0) {
-        ttt_error(0, 0, "connection interrupted");
-        return TTT_ERR_CONNECTION_FAILURE;
+        ton_error(0, 0, "connection interrupted");
+        return TON_ERR_CONNECTION_FAILURE;
     }
 
     /* Hopefully the header is valid... */
-    rc = ttt_msg_decode_header(msg, header, &tag, &body_length_bytes, &body_dest);
+    rc = ton_msg_decode_header(msg, header, &tag, &body_length_bytes, &body_dest);
     if (rc != 0) {
         return rc;
     }
 
     /* If it is valid, and there is a message body, read the body into
-     * body_dest and msg will then contain a complete TTT file transfer
+     * body_dest and msg will then contain a complete ton file transfer
      * session message. */
     if (body_length_bytes > 0) {
         rc = readall(sess, body_dest, body_length_bytes);
         if (rc != body_length_bytes) {
             if (rc < 0) {
-                ttt_error(0, 0, "connection interrupted");
-                return TTT_ERR_CONNECTION_FAILURE;
+                ton_error(0, 0, "connection interrupted");
+                return TON_ERR_CONNECTION_FAILURE;
             }
             else {
-                ttt_error(0, 0, "unexpected EOF during message body");
-                return TTT_ERR_EOF;
+                ton_error(0, 0, "unexpected EOF during message body");
+                return TON_ERR_EOF;
             }
         }
     }
     return 0;
 }
 
-/* Send a ttt_msg on the given ttt_session.
+/* Send a ton_msg on the given ton_session.
  * Return the number of bytes sent on success (this will always be greater
  * than 0) or -1 on failure. */
 static int
-ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
+ton_msg_send(struct ton_session *sess, struct ton_msg *msg) {
     size_t bytes_sent = 0;
     do {
         int rc;
@@ -645,7 +645,7 @@ ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
         if (rc <= 0) {
             if (rc < 0 && errno == EINTR)
                 continue;
-            ttt_error(0, errno, "connection interrupted");
+            ton_error(0, errno, "connection interrupted");
             return -1;
         }
         bytes_sent += rc;
@@ -653,36 +653,36 @@ ttt_msg_send(struct ttt_session *sess, struct ttt_msg *msg) {
     return bytes_sent;
 }
 
-/* Construct a TTT message of the given type and send it on the given
- * ttt_session.
+/* Construct a ton message of the given type and send it on the given
+ * ton_session.
  * The arguments after "tag" depend on the value of "tag", and they must be
  * correct according to msg_defs in protocol.c or undefined behaviour occurs.
  *
  * For example:
- *    ttt_send_message(sess, TTT_MSG_FILE_METADATA, (long long) size, (time_t) mtime, (int) mode, (char *) filename);
- *    ttt_send_message(sess, TTT_MSG_ERROR, TTT_ERR_PROTOCOL, "expected message, received rotting fish");
- *    ttt_send_message(sess, TTT_MSG_FILE_SET_END);
+ *    ton_send_message(sess, TON_MSG_FILE_METADATA, (long long) size, (time_t) mtime, (int) mode, (char *) filename);
+ *    ton_send_message(sess, TON_MSG_ERROR, TON_ERR_PROTOCOL, "expected message, received rotting fish");
+ *    ton_send_message(sess, TON_MSG_FILE_SET_END);
  *
  * This function cannot be used to send messages of type
- * TTT_MSG_FILE_DATA_CHUNK. These must be built using the
- * ttt_msg_file_data_chunk_* functions defined in protocol.c.
+ * TON_MSG_FILE_DATA_CHUNK. These must be built using the
+ * ton_msg_file_data_chunk_* functions defined in protocol.c.
  *
  * Return 0 on success or nonzero on failure.
  */
 static int
-ttt_send_message(struct ttt_session *sess, int tag, ...) {
-    struct ttt_msg msg;
+ton_send_message(struct ton_session *sess, int tag, ...) {
+    struct ton_msg msg;
     va_list ap;
     int rc;
 
     va_start(ap, tag);
-    rc = ttt_build_message(&msg, tag, ap);
+    rc = ton_build_message(&msg, tag, ap);
     va_end(ap);
 
     if (rc != 0)
         return rc;
 
-    rc = ttt_msg_send(sess, &msg);
+    rc = ton_msg_send(sess, &msg);
     if (rc < 0)
         return -1;
 
@@ -692,22 +692,22 @@ ttt_send_message(struct ttt_session *sess, int tag, ...) {
 /* Send an OK message in reply to a message sequence sent by file transfer's
  * sender end. */
 static int
-ttt_reply_ok(struct ttt_session *sess) {
-    return ttt_send_message(sess, TTT_MSG_OK);
+ton_reply_ok(struct ton_session *sess) {
+    return ton_send_message(sess, TON_MSG_OK);
 }
 
-/* Send a TTT_MSG_FATAL_ERROR message with the given code and string.
+/* Send a TON_MSG_FATAL_ERROR message with the given code and string.
  * fmt is a printf-style format string, and its arguments should follow. */
 static int
-ttt_send_fatal_error(struct ttt_session *sess, int code, const char *fmt, ...) {
+ton_send_fatal_error(struct ton_session *sess, int code, const char *fmt, ...) {
     va_list ap;
     char *message;
     int rc;
 
     va_start(ap, fmt);
 
-    message = ttt_vfalloc(fmt, ap);
-    rc = ttt_send_message(sess, TTT_MSG_FATAL_ERROR, code, message);
+    message = ton_vfalloc(fmt, ap);
+    rc = ton_send_message(sess, TON_MSG_FATAL_ERROR, code, message);
     free(message);
 
     va_end(ap);
@@ -715,18 +715,18 @@ ttt_send_fatal_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     return rc;
 }
 
-/* Send a TTT_MSG_ERROR message with the given code and string.
+/* Send a TON_MSG_ERROR message with the given code and string.
  * fmt is a printf-style format string, and its arguments should follow. */
 static int
-ttt_reply_error(struct ttt_session *sess, int code, const char *fmt, ...) {
+ton_reply_error(struct ton_session *sess, int code, const char *fmt, ...) {
     va_list ap;
     char *message;
     int rc;
 
     va_start(ap, fmt);
 
-    message = ttt_vfalloc(fmt, ap);
-    rc = ttt_send_message(sess, TTT_MSG_ERROR, code, message);
+    message = ton_vfalloc(fmt, ap);
+    rc = ton_send_message(sess, TON_MSG_ERROR, code, message);
     free(message);
 
     va_end(ap);
@@ -734,7 +734,7 @@ ttt_reply_error(struct ttt_session *sess, int code, const char *fmt, ...) {
     return rc;
 }
 
-/* Send a TTT_MSG_FILE_DATA_END message, to tell the receiver there are no
+/* Send a TON_MSG_FILE_DATA_END message, to tell the receiver there are no
  * more data chunks (or simply no data chunks) for the file we're sending.
  *
  * If error_code is 0, it indicates the file was sent correctly. Otherwise,
@@ -744,18 +744,18 @@ ttt_reply_error(struct ttt_session *sess, int code, const char *fmt, ...) {
  * error_format and its following printf-style arguments build the error
  * message which will be sent to the receiver and displayed to its user. */
 static int
-ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *error_format, ...) {
+ton_send_file_data_end(struct ton_session *sess, int error_code, const char *error_format, ...) {
     int rc;
 
     if (error_format == NULL) {
-        rc = ttt_send_message(sess, TTT_MSG_FILE_DATA_END, error_code, "");
+        rc = ton_send_message(sess, TON_MSG_FILE_DATA_END, error_code, "");
     }
     else {
         va_list ap;
         char *message;
         va_start(ap, error_format);
-        message = ttt_vfalloc(error_format, ap);
-        rc = ttt_send_message(sess, TTT_MSG_FILE_DATA_END, error_code, message);
+        message = ton_vfalloc(error_format, ap);
+        rc = ton_send_message(sess, TON_MSG_FILE_DATA_END, error_code, message);
         free(message);
         va_end(ap);
     }
@@ -763,7 +763,7 @@ ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *err
     return rc;
 }
 
-/* Receive a TTT protocol message on ttt_session, decode it, place the
+/* Receive a ton protocol message on ton_session, decode it, place the
  * message's encoded form in *msg and its decoded form in *decoded.
  * "decoded" may contain pointers to character strings in "msg", so decoded is
  * only valid for as long as the memory in msg remains valid.
@@ -773,52 +773,52 @@ ttt_send_file_data_end(struct ttt_session *sess, int error_code, const char *err
  * was in some way invalid.
  */
 static int
-ttt_get_next_message(struct ttt_session *sess, struct ttt_msg *msg, struct ttt_decoded_msg *decoded) {
-    int rc = ttt_msg_recv(sess, msg);
+ton_get_next_message(struct ton_session *sess, struct ton_msg *msg, struct ton_decoded_msg *decoded) {
+    int rc = ton_msg_recv(sess, msg);
     if (rc != 0) {
         return rc;
     }
-    rc = ttt_msg_decode(msg, decoded);
+    rc = ton_msg_decode(msg, decoded);
     if (rc != 0) {
-        ttt_send_fatal_error(sess, rc, "failed to decode message");
+        ton_send_fatal_error(sess, rc, "failed to decode message");
         return rc;
     }
     return 0;
 }
 
-/* Called by the sender end of a TTT file transfer session to receive a reply
- * to a message sequence. The reply should be TTT_MSG_OK, TTT_MSG_ERROR or
- * TTT_MSG_FATAL_ERROR.
+/* Called by the sender end of a ton file transfer session to receive a reply
+ * to a message sequence. The reply should be TON_MSG_OK, TON_MSG_ERROR or
+ * TON_MSG_FATAL_ERROR.
  *
- * Return 0 if we got TTT_MSG_OK.
- * Return TTT_MSG_ERROR or TTT_MSG_FATAL_ERROR as appropriate if we got
- * either of those, and call ttt_error() to report the error's code and
+ * Return 0 if we got TON_MSG_OK.
+ * Return TON_MSG_ERROR or TON_MSG_FATAL_ERROR as appropriate if we got
+ * either of those, and call ton_error() to report the error's code and
  * message.
  * Return some other nonzero value if there was a communication error or we
  * received an invalid response.
  */
 static int
-ttt_receive_reply_report_error(struct ttt_session *sess) {
-    struct ttt_msg msg;
-    struct ttt_decoded_msg decoded;
+ton_receive_reply_report_error(struct ton_session *sess) {
+    struct ton_msg msg;
+    struct ton_decoded_msg decoded;
     int rc;
 
-    rc = ttt_get_next_message(sess, &msg, &decoded);
+    rc = ton_get_next_message(sess, &msg, &decoded);
     if (rc != 0)
         return rc;
 
     switch (decoded.tag) {
-        case TTT_MSG_OK:
+        case TON_MSG_OK:
             return 0;
-        case TTT_MSG_ERROR:
-        case TTT_MSG_FATAL_ERROR:
-            ttt_error(0, 0, "received %serror from remote host: 0x%08x: %s",
-                    decoded.tag == TTT_MSG_FATAL_ERROR ? "fatal " : "",
+        case TON_MSG_ERROR:
+        case TON_MSG_FATAL_ERROR:
+            ton_error(0, 0, "received %serror from remote host: 0x%08x: %s",
+                    decoded.tag == TON_MSG_FATAL_ERROR ? "fatal " : "",
                     decoded.u.err.code, decoded.u.err.message);
-            return decoded.tag == TTT_MSG_ERROR ? TTT_ERR_REMOTE_ERROR : TTT_ERR_REMOTE_FATAL_ERROR;
+            return decoded.tag == TON_MSG_ERROR ? TON_ERR_REMOTE_ERROR : TON_ERR_REMOTE_FATAL_ERROR;
         default:
-            ttt_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
-            return TTT_ERR_PROTOCOL;
+            ton_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
+            return TON_ERR_PROTOCOL;
     }
 }
 
@@ -826,8 +826,8 @@ ttt_receive_reply_report_error(struct ttt_session *sess) {
  * ctx->next_progress_report to the expected time of the next progress report.
  */
 static void
-make_progress_report(struct ttt_file_transfer *ctx, int is_sender,
-        const TTT_LF_CHAR *filename, long file_number, long file_count,
+make_progress_report(struct ton_file_transfer *ctx, int is_sender,
+        const TON_LF_CHAR *filename, long file_number, long file_count,
         long long file_position, long long file_size, long long bytes_sent,
         long long bytes_total, long files_skipped, int finished) {
     if (ctx->progress) {
@@ -844,7 +844,7 @@ make_progress_report(struct ttt_file_transfer *ctx, int is_sender,
  * (that is, at least ctx->progress_report_interval has elapsed since the
  * last one). Return 0 otherwise. */
 static int
-is_progress_report_due(struct ttt_file_transfer *ctx) {
+is_progress_report_due(struct ton_file_transfer *ctx) {
     if (ctx->progress) {
         struct timeval now;
         gettimeofday(&now, NULL);
@@ -856,20 +856,20 @@ is_progress_report_due(struct ttt_file_transfer *ctx) {
 }
 
 static bool
-ttt_file_is_stdin(const struct ttt_file *f) {
-    return (!ttt_lf_cmp(f->local_path, TTT_LF_STDIN) && !strcmp(f->ttt_path, "stdin"));
+ton_file_is_stdin(const struct ton_file *f) {
+    return (!ton_lf_cmp(f->local_path, TON_LF_STDIN) && !strcmp(f->ton_path, "stdin"));
 }
 
-/* Already within a TTT_MSG_FILE_SET_START/TTT_MSG_FILE_SET_END block, send
- * a TTT_MSG_FILE_METADATA message, data chunks and TTT_MSG_FILE_DATA_END
+/* Already within a TON_MSG_FILE_SET_START/TON_MSG_FILE_SET_END block, send
+ * a TON_MSG_FILE_METADATA message, data chunks and TON_MSG_FILE_DATA_END
  * message for the given file.
  *
- * Return 0 if we successfully sent the TTT_MSG_FILE_DATA_END message. Note
+ * Return 0 if we successfully sent the TON_MSG_FILE_DATA_END message. Note
  * this does not mean we actually succeeded in sending the complete file, only
  * that the session is still alive and there was no fatal error
  *
  * If we failed to open or send any part of the file, we include the error
- * information in the TTT_MSG_FILE_DATA_END message we sent to the receiver,
+ * information in the TON_MSG_FILE_DATA_END message we sent to the receiver,
  * set *file_failed to 1, and return 0. If we successfully send the complete
  * file, we set *file_failed to 0 and return 0.
  *
@@ -888,11 +888,11 @@ ttt_file_is_stdin(const struct ttt_file *f) {
  * error and the session should be aborted.
  */
 int
-ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
+ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
         long file_number, long file_count, long long *bytes_sent_so_far,
-        long long *total_size, long num_files_skipped, struct ttt_file *f,
+        long long *total_size, long num_files_skipped, struct ton_file *f,
         bool *file_failed) {
-    struct ttt_msg msg;
+    struct ton_msg msg;
     FILE *stream = NULL;
     size_t bytes_read = 0;
     int return_value = 0;
@@ -901,7 +901,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
     *file_failed = 0;
 
     /* Send a metadata message, so the receiver knows to expect a file. */
-    if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
+    if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path) < 0) {
         goto fail;
     }
 
@@ -910,55 +910,55 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
          * Open the file we want to send. If this fails, tell the receiver that
          * there will be no data for this file and that we failed to send it. */
 
-        if (ttt_file_is_stdin(f)) {
+        if (ton_file_is_stdin(f)) {
             stream = stdin;
         }
         else {
-            stream = ttt_fopen(f->local_path, TTT_LF_MODE_RB);
+            stream = ton_fopen(f->local_path, TON_LF_MODE_RB);
         }
-        if (ttt_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
+        if (ton_random_file_open_failures && stream != NULL && rand() % 50 == 0) {
             fclose(stream);
             stream = NULL;
             errno = EPERM;
         }
         if (stream == NULL) {
             int err = errno;
-            ttt_error(0, err, TTT_LF_PRINTF, f->local_path);
-            if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
+            ton_error(0, err, TON_LF_PRINTF, f->local_path);
+            if (ton_send_file_data_end(sess, TON_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
                 goto fail;
             *file_failed = true;
             return 0;
         }
 
-        /* Now read the whole file in ttt_msg-sized chunks, and send them to
+        /* Now read the whole file in ton_msg-sized chunks, and send them to
          * the receiver. */
         do {
             void *msg_data_dest;
             int max_length;
 
             /* Initialise a file data chunk */
-            ttt_msg_file_data_chunk(&msg);
+            ton_msg_file_data_chunk(&msg);
 
-            max_length = ttt_msg_file_data_chunk_get_max_length(&msg);
-            msg_data_dest = ttt_msg_file_data_chunk_data_ptr(&msg);
+            max_length = ton_msg_file_data_chunk_get_max_length(&msg);
+            msg_data_dest = ton_msg_file_data_chunk_data_ptr(&msg);
 
             /* Read up to max_length bytes from the file into the message */
             errno = 0;
             bytes_read = fread(msg_data_dest, 1, max_length, stream);
-            if (ttt_random_file_read_failures && bytes_read != 0 && rand() % 100 == 0) {
+            if (ton_random_file_read_failures && bytes_read != 0 && rand() % 100 == 0) {
                 bytes_read = 0;
                 errno = EIO;
             }
             if (bytes_read == 0) {
                 /* End of file or error... */
-                if (ferror(stream) || (ttt_random_file_read_failures && errno == EIO)) {
-                    /* Error reading from the file. Send a TTT_MSG_FILE_DATA_END
+                if (ferror(stream) || (ton_random_file_read_failures && errno == EIO)) {
+                    /* Error reading from the file. Send a TON_MSG_FILE_DATA_END
                      * message with an error code, to tell the receiver this
                      * file failed to send. The session continues. */
                     int err = errno;
-                    ttt_error(0, err, TTT_LF_PRINTF, f->local_path);
+                    ton_error(0, err, TON_LF_PRINTF, f->local_path);
                     *file_failed = true;
-                    if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
+                    if (ton_send_file_data_end(sess, TON_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
                         goto fail;
                     }
                     if (*total_size >= 0)
@@ -966,16 +966,16 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 }
                 else {
                     /* End of file. We read and sent everything successfully. */
-                    if (ttt_send_file_data_end(sess, 0, NULL) != 0)
+                    if (ton_send_file_data_end(sess, 0, NULL) != 0)
                         goto fail;
                 }
             }
             else {
                 /* Set the length field of the chunk message... */
-                ttt_msg_file_data_chunk_set_length(&msg, (int) bytes_read);
+                ton_msg_file_data_chunk_set_length(&msg, (int) bytes_read);
 
                 /* Now send the chunk message */
-                if (ttt_msg_send(sess, &msg) < 0)
+                if (ton_msg_send(sess, &msg) < 0)
                     goto fail;
 
                 file_position += bytes_read;
@@ -997,7 +997,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         /* This is some other kind of file, like a directory or FIFO. There's
          * no data associated with this file, so behave like it's a zero-byte
          * file and send an "end of data" message. */
-        if (ttt_send_file_data_end(sess, 0, NULL) != 0)
+        if (ton_send_file_data_end(sess, 0, NULL) != 0)
             goto fail;
     }
 
@@ -1013,18 +1013,18 @@ fail:
     goto end;
 }
 
-/* Play the "sender" role in a TTT file transfer session set up in ctx. The
- * other end of the ttt_session sess should be playing the "receiver" role at
+/* Play the "sender" role in a ton file transfer session set up in ctx. The
+ * other end of the ton_session sess should be playing the "receiver" role at
  * the same time or things aren't going to go well.
  *
  * On return, set *total_files_out to the number of files we sent, and
  * *num_file_failures_out to the number of files we wanted to send but
  * couldn't. */
 static int
-ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
-        struct ttt_session *sess, long long *total_files_out,
+ton_file_transfer_session_sender(struct ton_file_transfer *ctx,
+        struct ton_session *sess, long long *total_files_out,
         long long *num_file_failures_out) {
-    struct ttt_file_list file_list;
+    struct ton_file_list file_list;
     bool walk_failures = false;
     int return_value = 0;
     long num_file_failures = 0;
@@ -1040,14 +1040,14 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
     }
 
     /* Build a list of all the files we want to send */
-    ttt_file_list_init(&file_list);
+    ton_file_list_init(&file_list);
     for (int i = 0; i < ctx->num_source_paths; ++i) {
-        if (!ttt_lf_cmp(ctx->source_paths[i], TTT_LF_STDIN)) {
+        if (!ton_lf_cmp(ctx->source_paths[i], TON_LF_STDIN)) {
             /* Special case - we'll read stdin and send that as a file */
-            rc = add_local_file_to_list(&file_list, TTT_LF_STDIN, NULL, -1);
+            rc = add_local_file_to_list(&file_list, TON_LF_STDIN, NULL, -1);
         }
         else {
-            rc = ttt_dir_walk(ctx->source_paths[i], add_local_file_to_list, &file_list);
+            rc = ton_dir_walk(ctx->source_paths[i], add_local_file_to_list, &file_list);
         }
         if (rc < 0) {
             goto fail;
@@ -1059,20 +1059,20 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
 
     if (walk_failures && file_list.start == NULL) {
         /* All files failed to be walked */
-        ttt_error(0, 0, "couldn't stat any files!");
+        ton_error(0, 0, "couldn't stat any files!");
         goto fail;
     }
 
     /* Now send a file metadata set message sequence. We send either a
      * metadata message for each file, or just a total file and byte count,
      * depending on whether ctx->send_full_metadata is set. */
-    if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_START) < 0)
+    if (ton_send_message(sess, TON_MSG_FILE_METADATA_SET_START) < 0)
         goto fail;
     total_files = 0;
-    for (struct ttt_file *f = file_list.start; f; f = f->next) {
+    for (struct ton_file *f = file_list.start; f; f = f->next) {
         if (ctx->send_full_metadata) {
             /* Send a metadata description for every file */
-            if (ttt_send_message(sess, TTT_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ttt_path) < 0) {
+            if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path) < 0) {
                 goto fail;
             }
         }
@@ -1084,40 +1084,40 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
     }
     if (!ctx->send_full_metadata) {
         /* Send metadata summary */
-        if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SUMMARY, (long long) total_files, progress_total_size) < 0) {
+        if (ton_send_message(sess, TON_MSG_FILE_METADATA_SUMMARY, (long long) total_files, progress_total_size) < 0) {
             goto fail;
         }
     }
 
     /* Tell the receiver that's the end of the metadata */
-    if (ttt_send_message(sess, TTT_MSG_FILE_METADATA_SET_END) < 0)
+    if (ton_send_message(sess, TON_MSG_FILE_METADATA_SET_END) < 0)
         goto fail;
 
     /* Get a reply from the receiver. The receiver might decide to refuse the
      * file set based on the metadata we've sent (there might not be enough
      * disk space available for the size we've reported, for example). */
-    rc = ttt_receive_reply_report_error(sess);
+    rc = ton_receive_reply_report_error(sess);
     if (rc == 0) {
         /* Receiver agrees to receive the files, so we can start.
          * Now send a file data set message sequence, in which for each file in
          * file_list, we send a metadata message and the file's data broken up
          * into data chunks... */
-        if (ttt_send_message(sess, TTT_MSG_FILE_SET_START) < 0)
+        if (ton_send_message(sess, TON_MSG_FILE_SET_START) < 0)
             goto fail;
-        for (struct ttt_file *f = file_list.start; f; f = f->next) {
+        for (struct ton_file *f = file_list.start; f; f = f->next) {
             bool file_failed = false;
             file_number++;
 
-            if (!ttt_file_is_stdin(f) && ttt_access(f->local_path, F_OK) != 0 && errno == ENOENT) {
+            if (!ton_file_is_stdin(f) && ton_access(f->local_path, F_OK) != 0 && errno == ENOENT) {
                 /* File existed when we walked the directories, but it's gone
                  * now. Report this as a non-fatal error. */
-                ttt_error(0, 0, TTT_LF_PRINTF " no longer exists, not sending it.", f->local_path);
+                ton_error(0, 0, TON_LF_PRINTF " no longer exists, not sending it.", f->local_path);
                 num_file_failures++;
                 continue;
             }
 
             /* Send file f to the receiver. */
-            if (ttt_send_file(ctx, sess, file_number, total_files,
+            if (ton_send_file(ctx, sess, file_number, total_files,
                         &progress_bytes_sent_so_far, &progress_total_size,
                         num_file_failures, f, &file_failed) < 0) {
                 goto fail;
@@ -1129,11 +1129,11 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
                 num_file_failures++;
             }
         }
-        if (ttt_send_message(sess, TTT_MSG_FILE_SET_END) < 0)
+        if (ton_send_message(sess, TON_MSG_FILE_SET_END) < 0)
             goto fail;
 
         if (ctx->progress) {
-            struct ttt_file *last_file = file_list.last;
+            struct ton_file *last_file = file_list.last;
             make_progress_report(ctx, 1,
                     last_file ? last_file->local_path : NULL, file_number,
                     total_files, last_file ? last_file->size : 0,
@@ -1141,10 +1141,10 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
                     progress_bytes_sent_so_far, num_file_failures, 1);
         }
 
-        if (ttt_receive_reply_report_error(sess) != 0)
+        if (ton_receive_reply_report_error(sess) != 0)
             goto fail;
     }
-    else if (rc == TTT_ERR_REMOTE_ERROR) {
+    else if (rc == TON_ERR_REMOTE_ERROR) {
         /* Remote host replied to metadata with non-fatal error. */
         num_file_failures = total_files;
     }
@@ -1158,7 +1158,7 @@ end:
         *total_files_out = total_files;
     if (num_file_failures_out)
         *num_file_failures_out = num_file_failures;
-    ttt_file_list_destroy(&file_list);
+    ton_file_list_destroy(&file_list);
     return return_value;
 
 fail:
@@ -1167,11 +1167,11 @@ fail:
 }
 
 /* Called by the side playing the Receiver role.
- * Having already received a TTT_MSG_FILE_METADATA_START, receive the file
- * metadata and the TTT_MSG_FILE_METADATA_END message.
+ * Having already received a TON_MSG_FILE_METADATA_START, receive the file
+ * metadata and the TON_MSG_FILE_METADATA_END message.
  * If the received file metadata contains a list of files the sender wants to
  * send us, add them to list, setting the local_path attribute of each
- * ttt_file object by appending the path to output_dir.
+ * ton_file object by appending the path to output_dir.
  * Otherwise, the received file metadata will contain only a summary containing
  * the file count and total size.
  *
@@ -1183,27 +1183,27 @@ fail:
  * Return 0 on success or nonzero on failure.
  */
 static int
-ttt_receive_file_metadata_set(struct ttt_session *sess,
-        const TTT_LF_CHAR *output_dir, struct ttt_file_list *list,
+ton_receive_file_metadata_set(struct ton_session *sess,
+        const TON_LF_CHAR *output_dir, struct ton_file_list *list,
         long long *file_count_out, long long *total_size_out) {
-    struct ttt_msg msg;
-    struct ttt_decoded_msg decoded;
+    struct ton_msg msg;
+    struct ton_decoded_msg decoded;
     long long file_count = 0, total_size = 0;
     bool received_summary = false;
 
     do {
-        if (ttt_get_next_message(sess, &msg, &decoded) != 0) {
+        if (ton_get_next_message(sess, &msg, &decoded) != 0) {
             goto fail;
         }
-        if (decoded.tag == TTT_MSG_FILE_METADATA_SUMMARY) {
+        if (decoded.tag == TON_MSG_FILE_METADATA_SUMMARY) {
             /* Summary only */
             file_count = decoded.u.metadata_summary.file_count;
             total_size = decoded.u.metadata_summary.total_size;
             received_summary = true;
         }
-        else if (decoded.tag == TTT_MSG_FILE_METADATA) {
+        else if (decoded.tag == TON_MSG_FILE_METADATA) {
             /* Full list of files */
-            int rc = add_ttt_file_to_list(list, decoded.u.metadata.size,
+            int rc = add_ton_file_to_list(list, decoded.u.metadata.size,
                     decoded.u.metadata.mtime, decoded.u.metadata.mode,
                     decoded.u.metadata.name, output_dir);
             if (rc < 0) {
@@ -1214,16 +1214,16 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
                 total_size += decoded.u.metadata.size;
             }
         }
-        else if (decoded.tag == TTT_MSG_FATAL_ERROR) {
-            ttt_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
+        else if (decoded.tag == TON_MSG_FATAL_ERROR) {
+            ton_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
             goto fail;
         }
-        else if (decoded.tag != TTT_MSG_FILE_METADATA_SET_END) {
-            ttt_error(0, 0, "sender sent unexpected tag 0x%x in a metadata list", decoded.tag);
-            ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent unexpected tag 0x%x in a metadata list", decoded.tag);
+        else if (decoded.tag != TON_MSG_FILE_METADATA_SET_END) {
+            ton_error(0, 0, "sender sent unexpected tag 0x%x in a metadata list", decoded.tag);
+            ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent unexpected tag 0x%x in a metadata list", decoded.tag);
             goto fail;
         }
-    } while (decoded.tag != TTT_MSG_FILE_METADATA_SET_END);
+    } while (decoded.tag != TON_MSG_FILE_METADATA_SET_END);
 
     if (file_count_out)
         *file_count_out = file_count;
@@ -1233,17 +1233,17 @@ ttt_receive_file_metadata_set(struct ttt_session *sess,
     return 0;
 
 fail:
-    ttt_file_list_destroy(list);
+    ton_file_list_destroy(list);
     return -1;
 }
 
 /* Write a progress counter to stderr showing how far we are through the
  * file transfer. */
 static void
-ttt_update_progress(const TTT_LF_CHAR *current_filename,
+ton_update_progress(const TON_LF_CHAR *current_filename,
         long long files_received, long long file_count,
         long long total_bytes_received, long long total_size) {
-    const TTT_LF_CHAR *display_filename = NULL;
+    const TON_LF_CHAR *display_filename = NULL;
     const int filename_limit = 44;
     bool filename_trimmed = false;
     char bytes_received_str[10];
@@ -1251,7 +1251,7 @@ ttt_update_progress(const TTT_LF_CHAR *current_filename,
 
     if (current_filename != NULL) {
         /* Show only the last filename_limit characters of the filename */
-        size_t len = ttt_lf_len(current_filename);
+        size_t len = ton_lf_len(current_filename);
         if (len > filename_limit) {
             display_filename = current_filename + len - filename_limit + 3;
             filename_trimmed = true;
@@ -1261,18 +1261,18 @@ ttt_update_progress(const TTT_LF_CHAR *current_filename,
         }
     }
     else {
-        display_filename = TTT_LF_EMPTY;
+        display_filename = TON_LF_EMPTY;
     }
 
-    /* TTT_LF_PRINTF_WIDTH: %-*s or %-*ls */
-    ttt_size_to_str(total_bytes_received, bytes_received_str);
-    fprintf(stderr, "%6" PRINTF_INT64 "d/%" PRINTF_INT64 "d %s" TTT_LF_PRINTF_WIDTH " | %6s",
+    /* TON_LF_PRINTF_WIDTH: %-*s or %-*ls */
+    ton_size_to_str(total_bytes_received, bytes_received_str);
+    fprintf(stderr, "%6" PRINTF_INT64 "d/%" PRINTF_INT64 "d %s" TON_LF_PRINTF_WIDTH " | %6s",
             files_received, file_count,
             filename_trimmed ? "..." : "",
             filename_limit - (filename_trimmed ? 3 : 0), display_filename,
             bytes_received_str);
     if (total_size > 0) {
-        ttt_size_to_str(total_size, total_size_str);
+        ton_size_to_str(total_size, total_size_str);
         fprintf(stderr, "/%6s  %3d%%\r",
                 total_size_str, (int) (100 * total_bytes_received / total_size));
     }
@@ -1281,18 +1281,18 @@ ttt_update_progress(const TTT_LF_CHAR *current_filename,
     }
 }
 
-/* Default progress callback for a struct ttt_file_transfer object. */
+/* Default progress callback for a struct ton_file_transfer object. */
 static void
 default_progress_callback(void *callback_cookie, int is_sender,
-            const TTT_LF_CHAR *filename, long file_number,
+            const TON_LF_CHAR *filename, long file_number,
             long total_files, long long file_position, long long file_size,
             long long bytes_so_far, long long total_bytes,
             long skipped_files, int finished) {
-    ttt_update_progress(filename, file_number, total_files, bytes_so_far,
+    ton_update_progress(filename, file_number, total_files, bytes_so_far,
             total_bytes);
     if (finished) {
         char size_str[10];
-        ttt_size_to_str(bytes_so_far, size_str);
+        ton_size_to_str(bytes_so_far, size_str);
         fprintf(stderr, "\n%s %ld file%s,", is_sender ? "Sent" : "Received",
                 file_number - skipped_files,
                 (file_number - skipped_files) == 1 ? "" : "s");
@@ -1306,9 +1306,9 @@ default_progress_callback(void *callback_cookie, int is_sender,
 
 /* Called by the endpoint playing the Receiver role.
  *
- * Having already received a TTT_MSG_FILE_SET_START message on the session
+ * Having already received a TON_MSG_FILE_SET_START message on the session
  * "sess", receive all the files the sender sends us and write them out under
- * ctx->output_dir, until we receive a TTT_MSG_FILE_SET_END message.
+ * ctx->output_dir, until we receive a TON_MSG_FILE_SET_END message.
  *
  * list, file_count and total_size are all received from the metadata section
  * which the sender should have sent us immediately before. file_count and
@@ -1317,24 +1317,24 @@ default_progress_callback(void *callback_cookie, int is_sender,
  * This function doesn't use list, but maybe we might at some point.
  *
  * If the sender starts sending a file (i.e. it sends us the
- * TTT_MSG_FILE_METADATA message it has to send before sending the data
+ * TON_MSG_FILE_METADATA message it has to send before sending the data
  * chunks), but then it encounters an error reading the file, it tells us
- * via an error code in the TTT_MSG_FILE_DATA_END message and we increment
+ * via an error code in the TON_MSG_FILE_DATA_END message and we increment
  * *sender_failed_file_count each time this happens.
  *
  * Return 0 on success (even if the sender failed to send some files) or
  * nonzero if we hit some unrecoverable error such as the session falling
  * apart. */
 static int
-ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
-        struct ttt_file_list *list, long long file_count, long long total_size,
+ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
+        struct ton_file_list *list, long long file_count, long long total_size,
         long long *sender_failed_file_count) {
-    struct ttt_msg msg;
-    struct ttt_decoded_msg decoded;
+    struct ton_msg msg;
+    struct ton_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
-    TTT_LF_CHAR *local_filename = NULL; /* name of current or last file received */
+    TON_LF_CHAR *local_filename = NULL; /* name of current or last file received */
     bool in_file_transfer = false; /* are we between FILE_METADATA and DATA_END */
-    char *ttt_filename = NULL; /* filename according to FILE_METADATA */
+    char *ton_filename = NULL; /* filename according to FILE_METADATA */
     time_t current_file_mtime = 0;
     long long current_file_position = 0;
     long long current_file_size = 0;
@@ -1351,16 +1351,16 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
     timeval_add(&now, &progress_report_interval, &next_progress_report);
 
     do {
-        if (ttt_get_next_message(sess, &msg, &decoded) != 0) {
+        if (ton_get_next_message(sess, &msg, &decoded) != 0) {
             goto fail;
         }
         gettimeofday(&now, NULL);
 
-        if (decoded.tag == TTT_MSG_FILE_METADATA) {
+        if (decoded.tag == TON_MSG_FILE_METADATA) {
             /* Metadata message which precedes a new file */
             if (in_file_transfer) {
-                ttt_error(0, 0, "TTT_MSG_FILE_METADATA tag received out of sequence!");
-                ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_METADATA tag but didn't end previous file %s", ttt_filename);
+                ton_error(0, 0, "TON_MSG_FILE_METADATA tag received out of sequence!");
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_METADATA tag but didn't end previous file %s", ton_filename);
                 goto fail;
             }
 
@@ -1374,18 +1374,18 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             current_file_number++;
 
             /* We are now in a file transfer, which means we can only receive
-             * TTT_MSG_FILE_DATA_CHUNK, TTT_MSG_FILE_DATA_END or
-             * TTT_MSG_FATAL_ERROR until the transfer is finished. */
+             * TON_MSG_FILE_DATA_CHUNK, TON_MSG_FILE_DATA_END or
+             * TON_MSG_FATAL_ERROR until the transfer is finished. */
             in_file_transfer = true;
 
-            /* Replace ttt_filename and local_filename with the details of the
+            /* Replace ton_filename and local_filename with the details of the
              * new file - this is now our current file. */
-            free(ttt_filename);
-            ttt_filename = strdup(decoded.u.metadata.name);
+            free(ton_filename);
+            ton_filename = strdup(decoded.u.metadata.name);
             free(local_filename);
-            local_filename = ttt_path_to_local_path(decoded.u.metadata.name, ctx->output_dir);
+            local_filename = ton_path_to_local_path(decoded.u.metadata.name, ctx->output_dir);
             if (local_filename == NULL) {
-                ttt_error(0, errno, "failed to allocate path name");
+                ton_error(0, errno, "failed to allocate path name");
                 goto fail;
             }
 
@@ -1398,36 +1398,36 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* This is a regular file. */
 
                 /* Create the containing directory if it isn't already there */
-                if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
+                if (ton_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
-                    ttt_error(0, err, "failed to create directory for " TTT_LF_PRINTF, local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for " TTT_LF_PRINTF ": %s", local_filename, strerror(err));
+                    ton_error(0, err, "failed to create directory for " TON_LF_PRINTF, local_filename);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for " TON_LF_PRINTF ": %s", local_filename, strerror(err));
                     goto fail;
                 }
 
                 /* Open a new file for writing. */
-                current_file = ttt_fopen(local_filename, TTT_LF_MODE_WB);
-                if (ttt_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
+                current_file = ton_fopen(local_filename, TON_LF_MODE_WB);
+                if (ton_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
                     fclose(current_file);
-                    ttt_unlink(local_filename);
+                    ton_unlink(local_filename);
                     current_file = NULL;
                     errno = EPERM;
                 }
                 if (current_file == NULL) {
-                    ttt_error(0, errno, "skipping " TTT_LF_PRINTF ": failed to open for writing", local_filename);
+                    ton_error(0, errno, "skipping " TON_LF_PRINTF ": failed to open for writing", local_filename);
                 }
             }
 #ifndef WINDOWS
             else if (S_ISFIFO(current_file_mode)) {
                 /* Create a FIFO, creating its containing directories if necessary. */
-                if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
+                if (ton_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
-                    ttt_error(0, err, "failed to create directory for fifo " TTT_LF_PRINTF, local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TTT_LF_PRINTF ": %s", local_filename, strerror(err));
+                    ton_error(0, err, "failed to create directory for fifo " TON_LF_PRINTF, local_filename);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TON_LF_PRINTF ": %s", local_filename, strerror(err));
                     goto fail;
                 }
                 if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
-                    ttt_error(0, errno, "skipping fifo " TTT_LF_PRINTF, local_filename);
+                    ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, local_filename);
                 }
             }
 #endif
@@ -1435,20 +1435,20 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* This is a directory entry. It arrives *after* any files it
                  * contains, so it should already exist unless it contains no
                  * files. Create the directory if we haven't already.
-                 * When we get the TTT_MSG_FILE_DATA_END message, we'll set
+                 * When we get the TON_MSG_FILE_DATA_END message, we'll set
                  * its timestamp and permissions. */
-                if (ttt_access(local_filename, F_OK) != 0) {
-                    if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
-                        ttt_error(0, errno, "failed to create directory " TTT_LF_PRINTF, local_filename);
+                if (ton_access(local_filename, F_OK) != 0) {
+                    if (ton_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
+                        ton_error(0, errno, "failed to create directory " TON_LF_PRINTF, local_filename);
                     }
                 }
             }
         }
-        else if (decoded.tag == TTT_MSG_FILE_DATA_CHUNK) {
+        else if (decoded.tag == TON_MSG_FILE_DATA_CHUNK) {
             /* A data chunk to be appended to the currently-open file. */
             if (!in_file_transfer) {
-                ttt_error(0, 0, "TTT_MSG_FILE_DATA_CHUNK sent without TTT_MSG_FILE_METADATA!");
-                ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_DATA_CHUNK but there was no TTT_MSG_FILE_METADATA before it");
+                ton_error(0, 0, "TON_MSG_FILE_DATA_CHUNK sent without TON_MSG_FILE_METADATA!");
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_DATA_CHUNK but there was no TON_MSG_FILE_METADATA before it");
                 goto fail;
             }
 
@@ -1457,7 +1457,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
              * end for writing). */
             if (current_file != NULL) {
                 size_t ret = fwrite(decoded.u.chunk.data, 1, decoded.u.chunk.length, current_file);
-                if (ttt_random_file_write_failures && ret != 0 && rand() % 100 == 0) {
+                if (ton_random_file_write_failures && ret != 0 && rand() % 100 == 0) {
                     ret = 0;
                     errno = EIO;
                 }
@@ -1467,8 +1467,8 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                      * Perhaps instead we could just report the error to our
                      * user and ignore the rest of the data for this file? */
                     int err = errno;
-                    ttt_error(0, err, "failed to write to " TTT_LF_PRINTF, local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", ttt_filename, strerror(err));
+                    ton_error(0, err, "failed to write to " TON_LF_PRINTF, local_filename);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", ton_filename, strerror(err));
                     goto fail;
                 }
             }
@@ -1477,15 +1477,15 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
             current_file_position += decoded.u.chunk.length;
             total_bytes_received += decoded.u.chunk.length;
         }
-        else if (decoded.tag == TTT_MSG_FILE_DATA_END) {
+        else if (decoded.tag == TON_MSG_FILE_DATA_END) {
             /* End of the data for this file. If the error code in this message
              * is zero, we have the complete file, otherwise the sender is
              * telling us there's been a problem. Either way, we want to
              * close our current file. */
             if (!in_file_transfer) {
-                /* TTT_MSG_FILE_DATA_END sent at the wrong point! */
-                ttt_error(0, 0, "TTT_MSG_FILE_DATA_END sent without TTT_MSG_FILE_METADATA!");
-                ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_DATA_END but there was no TTT_MSG_FILE_METADATA before it");
+                /* TON_MSG_FILE_DATA_END sent at the wrong point! */
+                ton_error(0, 0, "TON_MSG_FILE_DATA_END sent without TON_MSG_FILE_METADATA!");
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_DATA_END but there was no TON_MSG_FILE_METADATA before it");
                 goto fail;
             }
 
@@ -1500,11 +1500,11 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     /* If we fail to write out a file locally, we treat this
                      * as a fatal error and abort the session. */
                     int err = errno;
-                    ttt_error(0, err, "error on close of " TTT_LF_PRINTF, local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ttt_filename, strerror(err));
+                    ton_error(0, err, "error on close of " TON_LF_PRINTF, local_filename);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ton_filename, strerror(err));
 
                     /* Try to delete the file */
-                    ttt_unlink(local_filename);
+                    ton_unlink(local_filename);
                     goto fail;
                 }
                 current_file = NULL;
@@ -1520,16 +1520,16 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     if (!S_ISDIR(current_file_mode))
 #endif
                     {
-                        TTT_UTIMBUF timbuf;
+                        TON_UTIMBUF timbuf;
                         timbuf.actime = time(NULL);
                         timbuf.modtime = current_file_mtime;
-                        if (ttt_utime(local_filename, &timbuf) < 0) {
-                            ttt_error(0, errno, "warning: failed to set modification time of " TTT_LF_PRINTF, local_filename);
+                        if (ton_utime(local_filename, &timbuf) < 0) {
+                            ton_error(0, errno, "warning: failed to set modification time of " TON_LF_PRINTF, local_filename);
                         }
                     }
 
-                    if (ttt_chmod(local_filename, current_file_mode & 07777) < 0) {
-                        ttt_error(0, errno, "warning: failed to set mode %03o on " TTT_LF_PRINTF, current_file_mode & 07777, local_filename);
+                    if (ton_chmod(local_filename, current_file_mode & 07777) < 0) {
+                        ton_error(0, errno, "warning: failed to set mode %03o on " TON_LF_PRINTF, current_file_mode & 07777, local_filename);
                     }
                 }
             }
@@ -1539,36 +1539,36 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * report and remember it, and delete any partially-transferred
                  * file. */
                 if (ctx->output_file == NULL) {
-                    ttt_unlink(local_filename);
+                    ton_unlink(local_filename);
                 }
                 files_sender_failed++;
 
                 /* Don't expect the rest of this file */
                 if (total_bytes_remaining > 0)
                     total_bytes_remaining -= current_file_size - current_file_position;
-                ttt_error(0, 0, "warning: sender skipped " TTT_LF_PRINTF ": %s", local_filename, decoded.u.err.message);
+                ton_error(0, 0, "warning: sender skipped " TON_LF_PRINTF ": %s", local_filename, decoded.u.err.message);
             }
 
             /* We're no longer inside a file transfer, so the next message
-             * must be TTT_MSG_FILE_METADATA or TTT_MSG_FILE_SET_END */
+             * must be TON_MSG_FILE_METADATA or TON_MSG_FILE_SET_END */
             in_file_transfer = false;
         }
-        else if (decoded.tag == TTT_MSG_FATAL_ERROR) {
-            ttt_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
+        else if (decoded.tag == TON_MSG_FATAL_ERROR) {
+            ton_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
             goto fail;
         }
-        else if (decoded.tag == TTT_MSG_FILE_SET_END) {
+        else if (decoded.tag == TON_MSG_FILE_SET_END) {
             /* There are no more files. Exit the loop on this iteration. */
             if (in_file_transfer) {
-                ttt_error(0, 0, "received unexpected TTT_MSG_FILE_SET_END but current file still open");
-                ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent TTT_MSG_FILE_SET_END during file send but there was no TTT_FILE_DATA_END.");
+                ton_error(0, 0, "received unexpected TON_MSG_FILE_SET_END but current file still open");
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_SET_END during file send but there was no TON_FILE_DATA_END.");
                 goto fail;
             }
         }
         else {
             /* Whatever this is, we don't want it... */
-            ttt_error(0, 0, "received unexpected tag %d from sender during set of files", decoded.tag);
-            ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "sender sent unexpected tag %d while receiving file data", decoded.tag);
+            ton_error(0, 0, "received unexpected tag %d from sender during set of files", decoded.tag);
+            ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent unexpected tag %d while receiving file data", decoded.tag);
             goto fail;
         }
         if (is_progress_report_due(ctx)) {
@@ -1578,7 +1578,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     total_bytes_remaining < 0 ? -1 : total_bytes_received + total_bytes_remaining,
                     files_sender_failed, 0);
         }
-    } while (decoded.tag != TTT_MSG_FILE_SET_END);
+    } while (decoded.tag != TON_MSG_FILE_SET_END);
 
     /* Write a final "we've finished!" progress report. */
     make_progress_report(ctx, 0, local_filename, current_file_number,
@@ -1588,7 +1588,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
 end:
     *sender_failed_file_count = files_sender_failed;
     free(local_filename);
-    free(ttt_filename);
+    free(ton_filename);
     if (current_file && current_file != ctx->output_file)
         fclose(current_file);
     return return_value;
@@ -1598,13 +1598,13 @@ fail:
     goto end;
 }
 
-/* Play the "receiver" role in a TTT file transfer session set up in ctx. The
- * other end of the ttt_session sess should be playing the "sender" role at
+/* Play the "receiver" role in a ton file transfer session set up in ctx. The
+ * other end of the ton_session sess should be playing the "sender" role at
  * the same time, or things will go rapidly downhill.
  *
- * The sender should send us a TTT_MSG_FILE_METADATA_SET_START message followed
- * by the metadata section, then a TTT_FILE_SET_START message followed by the
- * actual files, then either TTT_MSG_SWITCH_ROLES or TTT_MSG_END_SESSION.
+ * The sender should send us a TON_MSG_FILE_METADATA_SET_START message followed
+ * by the metadata section, then a TON_FILE_SET_START message followed by the
+ * actual files, then either TON_MSG_SWITCH_ROLES or TON_MSG_END_SESSION.
  *
  * After the metadata section, if ctx->request_to_send is set, we call it
  * passing the metadata information to give the user the opportunity to cancel
@@ -1621,45 +1621,45 @@ fail:
  * Also return <0 if the ctx->request_to_send() callback told us to reject the
  * file set.
  *
- * Return 0 if the sender sent us TTT_MSG_END_SESSION.
- * Return 1 if the sender sent us TTT_MSG_SWITCH_ROLES, after which we are
+ * Return 0 if the sender sent us TON_MSG_END_SESSION.
+ * Return 1 if the sender sent us TON_MSG_SWITCH_ROLES, after which we are
  * the sender side.
  */
 static int
-ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
-        struct ttt_session *sess, long long *file_count_out,
+ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
+        struct ton_session *sess, long long *file_count_out,
         long long *sender_failed_file_count_out) {
-    struct ttt_file_list list;
-    struct ttt_msg msg;
-    struct ttt_decoded_msg decoded;
+    struct ton_file_list list;
+    struct ton_msg msg;
+    struct ton_decoded_msg decoded;
     int return_value = 0;
     int rc;
     long long file_count = -1, total_size = -1;
     long long sender_failed_file_count = 0;
     bool file_set_rejected = false;
 
-    ttt_file_list_init(&list);
+    ton_file_list_init(&list);
 
     do {
-        rc = ttt_get_next_message(sess, &msg, &decoded);
+        rc = ton_get_next_message(sess, &msg, &decoded);
         if (rc != 0) {
             goto fail;
         }
 
         switch (decoded.tag) {
-            case TTT_MSG_SWITCH_ROLES:
+            case TON_MSG_SWITCH_ROLES:
                 return_value = 1;
                 break;
 
-            case TTT_MSG_END_SESSION:
+            case TON_MSG_END_SESSION:
                 return_value = 0;
                 break;
 
-            case TTT_MSG_FILE_METADATA_SET_START:
+            case TON_MSG_FILE_METADATA_SET_START:
                 /* Receive file metadata into list */
-                ttt_file_list_destroy(&list);
-                ttt_file_list_init(&list);
-                rc = ttt_receive_file_metadata_set(sess, ctx->output_dir, &list, &file_count, &total_size);
+                ton_file_list_destroy(&list);
+                ton_file_list_init(&list);
+                rc = ton_receive_file_metadata_set(sess, ctx->output_dir, &list, &file_count, &total_size);
                 if (rc < 0)
                     goto fail;
 
@@ -1673,47 +1673,47 @@ ttt_file_transfer_session_receiver(struct ttt_file_transfer *ctx,
                 if (rc == 0) {
                     /* Reply to sender to tell it to go ahead and send us
                      * the files. */
-                    if (ttt_reply_ok(sess) < 0)
+                    if (ton_reply_ok(sess) < 0)
                         goto fail;
                 }
                 else {
                     /* User rejected the files. Send an error reply and
                      * make this a fatal error. */
                     file_set_rejected = true;
-                    if (ttt_reply_error(sess, TTT_ERR_FILE_SET_REJECTED, "remote user rejected file set") < 0)
+                    if (ton_reply_error(sess, TON_ERR_FILE_SET_REJECTED, "remote user rejected file set") < 0)
                         goto fail;
                 }
                 break;
 
-            case TTT_MSG_FILE_SET_START:
+            case TON_MSG_FILE_SET_START:
                 if (file_set_rejected) {
                     /* Um excuse me I thought I said... */
-                    ttt_error(0, 0, "sender tried to send a file set despite us refusing it. Aborting session...");
-                    ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "file set sent despite receiver refusing it");
+                    ton_error(0, 0, "sender tried to send a file set despite us refusing it. Aborting session...");
+                    ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "file set sent despite receiver refusing it");
                     goto fail;
                 }
 
                 /* Receive files and write them to output_dir */
-                rc = ttt_receive_file_set(ctx, sess, &list, file_count, total_size, &sender_failed_file_count);
+                rc = ton_receive_file_set(ctx, sess, &list, file_count, total_size, &sender_failed_file_count);
                 if (rc < 0)
                     goto fail;
 
                 /* Reply to sender */
-                if (ttt_reply_ok(sess) < 0)
+                if (ton_reply_ok(sess) < 0)
                     goto fail;
                 break;
 
-            case TTT_MSG_FATAL_ERROR:
-                ttt_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
+            case TON_MSG_FATAL_ERROR:
+                ton_error(0, 0, "received fatal error from sender: 0x%08x: %s", decoded.u.err.code, decoded.u.err.message);
                 goto fail;
                 break;
 
             default:
-                ttt_error(0, 0, "protocol error: received unexpected tag %d at start of message sequence", decoded.tag);
-                ttt_send_fatal_error(sess, TTT_ERR_PROTOCOL, "receiver got unexpected tag %d at start of message sequence", decoded.tag);
+                ton_error(0, 0, "protocol error: received unexpected tag %d at start of message sequence", decoded.tag);
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "receiver got unexpected tag %d at start of message sequence", decoded.tag);
                 goto fail;
         }
-    } while (decoded.tag != TTT_MSG_SWITCH_ROLES && decoded.tag != TTT_MSG_END_SESSION);
+    } while (decoded.tag != TON_MSG_SWITCH_ROLES && decoded.tag != TON_MSG_END_SESSION);
 
 end:
     if (file_count_out)
@@ -1721,31 +1721,31 @@ end:
     if (sender_failed_file_count_out)
         *sender_failed_file_count_out = sender_failed_file_count;
 
-    ttt_file_list_destroy(&list);
+    ton_file_list_destroy(&list);
     return return_value;
 
 fail:
-    ttt_error(0, 0, "file transfer failed with fatal error");
+    ton_error(0, 0, "file transfer failed with fatal error");
     return_value = -1;
     goto end;
 }
 
 static int
-ttt_file_transfer_session_switch_roles(struct ttt_session *sess) {
-    return ttt_send_message(sess, TTT_MSG_SWITCH_ROLES);
+ton_file_transfer_session_switch_roles(struct ton_session *sess) {
+    return ton_send_message(sess, TON_MSG_SWITCH_ROLES);
 }
 
 static int
-ttt_file_transfer_session_end(struct ttt_session *sess) {
-    return ttt_send_message(sess, TTT_MSG_END_SESSION);
+ton_file_transfer_session_end(struct ton_session *sess) {
+    return ton_send_message(sess, TON_MSG_END_SESSION);
 }
 
-/* Set up a struct ttt_file_transfer context structure for either the sender
- * or receiver role. Called by ttt_file_transfer_init_sender() and
- * ttt_file_transfer_init_receiver() to initialise things not specific to
+/* Set up a struct ton_file_transfer context structure for either the sender
+ * or receiver role. Called by ton_file_transfer_init_sender() and
+ * ton_file_transfer_init_receiver() to initialise things not specific to
  * either role. */
 static void
-ttt_file_transfer_init(struct ttt_file_transfer *ctx, bool start_as_sender) {
+ton_file_transfer_init(struct ton_file_transfer *ctx, bool start_as_sender) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->start_as_sender = start_as_sender;
 
@@ -1757,23 +1757,23 @@ ttt_file_transfer_init(struct ttt_file_transfer *ctx, bool start_as_sender) {
 
     ctx->output_file = NULL;
 
-    ttt_file_transfer_set_progress_callback(ctx, default_progress_callback);
+    ton_file_transfer_set_progress_callback(ctx, default_progress_callback);
 }
 
-/* Initialise a struct ttt_file_transfer where we want to be the sender first. */
+/* Initialise a struct ton_file_transfer where we want to be the sender first. */
 int
-ttt_file_transfer_init_sender(struct ttt_file_transfer *ctx, const char **source_paths, int num_source_paths) {
-    ttt_file_transfer_init(ctx, true);
+ton_file_transfer_init_sender(struct ton_file_transfer *ctx, const char **source_paths, int num_source_paths) {
+    ton_file_transfer_init(ctx, true);
 
     /* Copy each string from source_paths to ctx->source_paths */
     if (num_source_paths > 0) {
-        ctx->source_paths = malloc(sizeof(TTT_LF_CHAR *) * num_source_paths);
+        ctx->source_paths = malloc(sizeof(TON_LF_CHAR *) * num_source_paths);
         if (ctx->source_paths == NULL)
             goto fail;
         ctx->num_source_paths = num_source_paths;
-        memset(ctx->source_paths, 0, sizeof(TTT_LF_CHAR *) * num_source_paths);
+        memset(ctx->source_paths, 0, sizeof(TON_LF_CHAR *) * num_source_paths);
         for (int i = 0; i < num_source_paths; ++i) {
-            ctx->source_paths[i] = ttt_lf_from_locale(source_paths[i]);
+            ctx->source_paths[i] = ton_lf_from_locale(source_paths[i]);
             if (ctx->source_paths[i] == NULL) {
                 goto fail;
             }
@@ -1787,53 +1787,53 @@ ttt_file_transfer_init_sender(struct ttt_file_transfer *ctx, const char **source
     return 0;
 
 fail:
-    ttt_file_transfer_destroy(ctx);
+    ton_file_transfer_destroy(ctx);
     return -1;
 }
 
-/* Initialise a struct ttt_file_transfer where we want to be the receiver first. */
+/* Initialise a struct ton_file_transfer where we want to be the receiver first. */
 int
-ttt_file_transfer_init_receiver(struct ttt_file_transfer *ctx, const char *output_dir) {
-    ttt_file_transfer_init(ctx, false);
+ton_file_transfer_init_receiver(struct ton_file_transfer *ctx, const char *output_dir) {
+    ton_file_transfer_init(ctx, false);
 
-    ctx->output_dir = ttt_lf_from_locale(output_dir);
+    ctx->output_dir = ton_lf_from_locale(output_dir);
     if (ctx->output_dir == NULL)
         goto fail;
 
     return 0;
 
 fail:
-    ttt_file_transfer_destroy(ctx);
+    ton_file_transfer_destroy(ctx);
     return -1;
 }
 
 void
-ttt_file_transfer_set_callback_cookie(struct ttt_file_transfer *ctx, void *cookie) {
+ton_file_transfer_set_callback_cookie(struct ton_file_transfer *ctx, void *cookie) {
     ctx->callback_cookie = cookie;
 }
 
 void
-ttt_file_transfer_set_request_to_send_callback(struct ttt_file_transfer *ctx, ttt_ft_request_to_send_cb cb) {
+ton_file_transfer_set_request_to_send_callback(struct ton_file_transfer *ctx, ton_ft_request_to_send_cb cb) {
     ctx->request_to_send = cb;
 }
 
 void
-ttt_file_transfer_set_send_full_metadata(struct ttt_file_transfer *ctx, bool value) {
+ton_file_transfer_set_send_full_metadata(struct ton_file_transfer *ctx, bool value) {
     ctx->send_full_metadata = value;
 }
 
 void
-ttt_file_transfer_set_output_file(struct ttt_file_transfer *ctx, FILE *f) {
+ton_file_transfer_set_output_file(struct ton_file_transfer *ctx, FILE *f) {
     ctx->output_file = f;
 }
 
 void
-ttt_file_transfer_set_progress_callback(struct ttt_file_transfer *ctx, ttt_ft_progress_cb cb) {
+ton_file_transfer_set_progress_callback(struct ton_file_transfer *ctx, ton_ft_progress_cb cb) {
     ctx->progress = cb;
 }
 
 int
-ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *sess) {
+ton_file_transfer_session(struct ton_file_transfer *ctx, struct ton_session *sess) {
     bool finished = false;
     bool is_sender = ctx->start_as_sender;
     bool have_been_sender = false;
@@ -1850,18 +1850,18 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
                 rc = 0;
             }
             else {
-                rc = ttt_file_transfer_session_sender(ctx, sess,
+                rc = ton_file_transfer_session_sender(ctx, sess,
                         &total_files_to_send, &num_files_failed);
                 have_been_sender = true;
             }
         }
         else {
-            rc = ttt_file_transfer_session_receiver(ctx, sess,
+            rc = ton_file_transfer_session_receiver(ctx, sess,
                     &total_files_to_send, &num_files_failed);
             have_been_receiver = true;
         }
         if (rc == 0 && num_files_failed > 0) {
-            ttt_error(0, 0, "warning: %lld of %lld files were not sent%s",
+            ton_error(0, 0, "warning: %lld of %lld files were not sent%s",
                     num_files_failed, total_files_to_send,
                     is_sender ? " to receiver" : " to us");
             failed = true;
@@ -1886,11 +1886,11 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
                  * files), or if we've already taken a turn at being receiver,
                  * then end the session here. Otherwise, switch roles. */
                 if (ctx->output_dir == NULL || have_been_receiver) {
-                    ttt_file_transfer_session_end(sess);
+                    ton_file_transfer_session_end(sess);
                     finished = true;
                 }
                 else {
-                    if (ttt_file_transfer_session_switch_roles(sess) < 0) {
+                    if (ton_file_transfer_session_switch_roles(sess) < 0) {
                         finished = true;
                         failed = true;
                     }
@@ -1909,7 +1909,7 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
 
     /* Did we want to push files but didn't get an opportunity to be sender? */
     if (!failed && ctx->num_source_paths > 0 && !have_been_sender) {
-        ttt_error(0, 0, "couldn't push: remote host did not accept any files");
+        ton_error(0, 0, "couldn't push: remote host did not accept any files");
         failed = true;
     }
 
@@ -1920,7 +1920,7 @@ ttt_file_transfer_session(struct ttt_file_transfer *ctx, struct ttt_session *ses
 }
 
 void
-ttt_file_transfer_destroy(struct ttt_file_transfer *ctx) {
+ton_file_transfer_destroy(struct ton_file_transfer *ctx) {
     for (int i = 0; i < ctx->num_source_paths; ++i) {
         free(ctx->source_paths[i]);
     }
@@ -1930,12 +1930,12 @@ ttt_file_transfer_destroy(struct ttt_file_transfer *ctx) {
 
 /*****************************************************************************/
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <CUnit/CUnit.h>
 
 static void
-local_filename_replace(TTT_LF_CHAR *str, TTT_LF_CHAR out, TTT_LF_CHAR in) {
+local_filename_replace(TON_LF_CHAR *str, TON_LF_CHAR out, TON_LF_CHAR in) {
     for (; *str; str++) {
         if (*str == out)
             *str = in;
@@ -1961,10 +1961,10 @@ test_join_paths(void) {
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        TTT_LF_CHAR *path1 = ttt_lf_from_utf8(test_cases[i].path1);
-        TTT_LF_CHAR *path2 = ttt_lf_from_utf8(test_cases[i].path2);
-        TTT_LF_CHAR *expected = ttt_lf_from_utf8(test_cases[i].expected);
-        TTT_LF_CHAR *observed = malloc((ttt_lf_len(path1) + ttt_lf_len(path2) + 2) * ttt_lf_char_size());
+        TON_LF_CHAR *path1 = ton_lf_from_utf8(test_cases[i].path1);
+        TON_LF_CHAR *path2 = ton_lf_from_utf8(test_cases[i].path2);
+        TON_LF_CHAR *expected = ton_lf_from_utf8(test_cases[i].expected);
+        TON_LF_CHAR *observed = malloc((ton_lf_len(path1) + ton_lf_len(path2) + 2) * ton_lf_char_size());
         char test_num[20];
         sprintf(test_num, "%d", i);
 
@@ -1975,12 +1975,12 @@ test_join_paths(void) {
 
         join_paths(path1, path2, observed);
 
-        if (ttt_lf_cmp(observed, expected)) {
+        if (ton_lf_cmp(observed, expected)) {
             fprintf(stderr, "test_join_paths: "
-                    "path1 \"" TTT_LF_PRINTF
-                    "\", path2 \"" TTT_LF_PRINTF
-                    "\", expected \"" TTT_LF_PRINTF
-                    "\", observed \"" TTT_LF_PRINTF "\"\n",
+                    "path1 \"" TON_LF_PRINTF
+                    "\", path2 \"" TON_LF_PRINTF
+                    "\", expected \"" TON_LF_PRINTF
+                    "\", observed \"" TON_LF_PRINTF "\"\n",
                     path1, path2, expected, observed);
             CU_FAIL("join_paths() result not as expected");
         }
@@ -1993,7 +1993,7 @@ test_join_paths(void) {
 }
 
 static void
-test_local_path_to_ttt_path(void) {
+test_local_path_to_ton_path(void) {
     struct {
         const char *local_path;
         const char *expected;
@@ -2004,16 +2004,16 @@ test_local_path_to_ttt_path(void) {
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        TTT_LF_CHAR *local_path = ttt_lf_from_utf8(test_cases[i].local_path);
+        TON_LF_CHAR *local_path = ton_lf_from_utf8(test_cases[i].local_path);
         const char *expected = test_cases[i].expected;
         char *observed;
 
         local_filename_replace(local_path, '/', DIR_SEP);
 
-        observed = local_path_to_ttt_path(local_path);
+        observed = local_path_to_ton_path(local_path);
         if (strcmp(observed, expected) != 0) {
-            fprintf(stderr, "test_local_path_to_ttt_path: local_path \""
-                    TTT_LF_PRINTF "\", expected \"%s\", "
+            fprintf(stderr, "test_local_path_to_ton_path: local_path \""
+                    TON_LF_PRINTF "\", expected \"%s\", "
                     "observed \"%s\"\n", local_path, expected, observed);
         }
         CU_ASSERT_STRING_EQUAL(observed, expected);
@@ -2024,9 +2024,9 @@ test_local_path_to_ttt_path(void) {
 }
 
 static void
-test_ttt_path_to_local_path(void) {
+test_ton_path_to_local_path(void) {
     struct {
-        const char *ttt_path;
+        const char *ton_path;
         const char *local_base_dir;
         const char *expected;
     } test_cases[] = {
@@ -2043,22 +2043,22 @@ test_ttt_path_to_local_path(void) {
     };
 
     for (int i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        const char *ttt_path = test_cases[i].ttt_path;
-        TTT_LF_CHAR *local_base_dir = ttt_lf_from_utf8(test_cases[i].local_base_dir);
-        TTT_LF_CHAR *expected = ttt_lf_from_utf8(test_cases[i].expected);
-        TTT_LF_CHAR *observed;
+        const char *ton_path = test_cases[i].ton_path;
+        TON_LF_CHAR *local_base_dir = ton_lf_from_utf8(test_cases[i].local_base_dir);
+        TON_LF_CHAR *expected = ton_lf_from_utf8(test_cases[i].expected);
+        TON_LF_CHAR *observed;
 
         local_filename_replace(local_base_dir, '/', DIR_SEP);
         local_filename_replace(expected, '/', DIR_SEP);
 
-        observed = ttt_path_to_local_path(ttt_path, local_base_dir);
-        if (ttt_lf_cmp(observed, expected) != 0) {
-            fprintf(stderr, "test_ttt_path_to_local_path(): ttt_path \"%s\", "
-                    "local_base_dir \"" TTT_LF_PRINTF
-                    "\", expected \"" TTT_LF_PRINTF
-                    "\", observed \"" TTT_LF_PRINTF "\"\n",
-                    ttt_path, local_base_dir, expected, observed);
-            CU_FAIL("ttt_path_to_local_path() result not as expected");
+        observed = ton_path_to_local_path(ton_path, local_base_dir);
+        if (ton_lf_cmp(observed, expected) != 0) {
+            fprintf(stderr, "test_ton_path_to_local_path(): ton_path \"%s\", "
+                    "local_base_dir \"" TON_LF_PRINTF
+                    "\", expected \"" TON_LF_PRINTF
+                    "\", observed \"" TON_LF_PRINTF "\"\n",
+                    ton_path, local_base_dir, expected, observed);
+            CU_FAIL("ton_path_to_local_path() result not as expected");
         }
 
         free(observed);
@@ -2068,11 +2068,11 @@ test_ttt_path_to_local_path(void) {
 }
 
 CU_ErrorCode
-ttt_filetransfer_register_tests(void) {
+ton_filetransfer_register_tests(void) {
     CU_TestInfo tests[] = {
         { "join_paths", test_join_paths },
-        { "local_path_to_ttt_path", test_local_path_to_ttt_path },
-        { "ttt_path_to_local_path", test_ttt_path_to_local_path },
+        { "local_path_to_ton_path", test_local_path_to_ton_path },
+        { "ton_path_to_local_path", test_ton_path_to_local_path },
         CU_TEST_INFO_NULL
     };
 

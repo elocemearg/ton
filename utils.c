@@ -24,7 +24,7 @@
 #endif
 
 void
-ttt_dump_hex(const void *data, size_t length, const char *context) {
+ton_dump_hex(const void *data, size_t length, const char *context) {
     const unsigned char *d = (const unsigned char *)data;
 
     printf("%s\n", context);
@@ -59,7 +59,7 @@ closesocket(int fd) {
 #endif
 
 int
-ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
+ton_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
     switch (addr->sa_family) {
         case AF_INET:
             ((struct sockaddr_in *) addr)->sin_port = htons(port);
@@ -76,9 +76,9 @@ ttt_sockaddr_set_port(struct sockaddr *addr, unsigned short port) {
 }
 
 void
-ttt_verror(int exit_status, const char *errstr, const char *format, va_list ap) {
+ton_verror(int exit_status, const char *errstr, const char *format, va_list ap) {
     fflush(stdout);
-    fprintf(stderr, "ttt: ");
+    fprintf(stderr, "ton: ");
     vfprintf(stderr, format, ap);
     if (errstr != NULL) {
         fprintf(stderr, ": %s", errstr);
@@ -89,16 +89,16 @@ ttt_verror(int exit_status, const char *errstr, const char *format, va_list ap) 
 }
 
 void
-ttt_error(int exit_status, int err, const char *format, ...) {
+ton_error(int exit_status, int err, const char *format, ...) {
     va_list ap;
     va_start(ap, format);
-    ttt_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
+    ton_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
     va_end(ap);
 }
 
 #ifdef WINDOWS
 void
-ttt_socket_error(int exit_status, const char *format, ...) {
+ton_socket_error(int exit_status, const char *format, ...) {
     va_list ap;
     int err = WSAGetLastError();
     char errstr[256] = "";
@@ -115,21 +115,21 @@ ttt_socket_error(int exit_status, const char *format, ...) {
     }
 
     va_start(ap, format);
-    ttt_verror(exit_status, errstr, format, ap);
+    ton_verror(exit_status, errstr, format, ap);
     va_end(ap);
 }
 #else
-void ttt_socket_error(int exit_status, const char *format, ...) {
+void ton_socket_error(int exit_status, const char *format, ...) {
     va_list ap;
     int err = errno;
     va_start(ap, format);
-    ttt_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
+    ton_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
     va_end(ap);
 }
 #endif
 
 char *
-ttt_vfalloc(const char *fmt, va_list ap) {
+ton_vfalloc(const char *fmt, va_list ap) {
     char *buf;
     int buf_size;
     int ret;
@@ -199,7 +199,7 @@ timeval_diff(const struct timeval *a, const struct timeval *b, struct timeval *r
  * such as "4.32MB" and write it to dest.
  * dest must point to a buffer of at least 7 bytes. */
 void
-ttt_size_to_str(long long size, char *dest) {
+ton_size_to_str(long long size, char *dest) {
     static const char *power_letters = " KMGTPEZY";
     if (size < 0) {
         strcpy(dest, "?");
@@ -236,12 +236,12 @@ parse_double_or_exit(const char *str, const char *option) {
     double d = strtod(str, &endptr);
     if (*str && endptr != NULL && *endptr == '\0') {
         if (!isnormal(d)) {
-            ttt_error(1, 0, "%s: argument %s is out of range", option, str);
+            ton_error(1, 0, "%s: argument %s is out of range", option, str);
         }
         return d;
     }
     else {
-        ttt_error(1, 0, "%s: argument %s is not a number", option, str);
+        ton_error(1, 0, "%s: argument %s is not a number", option, str);
         return 0;
     }
 }
@@ -249,7 +249,7 @@ parse_double_or_exit(const char *str, const char *option) {
 
 #ifdef WINDOWS
 void
-ttt_sockets_setup() {
+ton_sockets_setup() {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(1, 1), &wsaData) != 0) {
         fprintf(stderr, "WSAStartup() failed.\n");
@@ -258,22 +258,22 @@ ttt_sockets_setup() {
 }
 
 void
-ttt_sockets_teardown() {
+ton_sockets_teardown() {
     WSACleanup();
 }
 #else
 void
-ttt_sockets_setup() {
+ton_sockets_setup() {
 }
 
 void
-ttt_sockets_teardown() {
+ton_sockets_teardown() {
 }
 #endif
 
 #ifdef WINDOWS
 int
-ttt_make_socket_blocking(int sock) {
+ton_make_socket_blocking(int sock) {
     u_long mode = 0;
     if (ioctlsocket(sock, FIONBIO, &mode) != NO_ERROR)
         return -1;
@@ -281,7 +281,7 @@ ttt_make_socket_blocking(int sock) {
 }
 
 int
-ttt_make_socket_non_blocking(int sock) {
+ton_make_socket_non_blocking(int sock) {
     u_long mode = 1;
     if (ioctlsocket(sock, FIONBIO, &mode) != NO_ERROR)
         return -1;
@@ -291,7 +291,7 @@ ttt_make_socket_non_blocking(int sock) {
 #include <unistd.h>
 #include <fcntl.h>
 int
-ttt_make_socket_blocking(int sock) {
+ton_make_socket_blocking(int sock) {
     int flags = fcntl(sock, F_GETFL, 0);
     flags &= ~O_NONBLOCK;
     if (fcntl(sock, F_SETFL, flags) < 0)
@@ -300,7 +300,7 @@ ttt_make_socket_blocking(int sock) {
 }
 
 int
-ttt_make_socket_non_blocking(int sock) {
+ton_make_socket_non_blocking(int sock) {
     int flags = fcntl(sock, F_GETFL, 0);
     flags |= O_NONBLOCK;
     if (fcntl(sock, F_SETFL, flags) < 0)
@@ -311,7 +311,7 @@ ttt_make_socket_non_blocking(int sock) {
 
 /*****************************************************************************/
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <CUnit/CUnit.h>
 
@@ -393,7 +393,7 @@ test_timeval_diff(void) {
 }
 
 CU_ErrorCode
-ttt_utils_register_tests(void) {
+ton_utils_register_tests(void) {
     CU_TestInfo tests[] = {
         { "timeval_add", test_timeval_add },
         { "timeval_diff", test_timeval_diff },

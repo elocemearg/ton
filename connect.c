@@ -21,26 +21,26 @@
 #include "session.h"
 
 static void
-tttmcctx_free_session(struct tttmcctx *ctx, struct ttt_session *s) {
-    ttt_session_destroy(s);
+tonmcctx_free_session(struct tonmcctx *ctx, struct ton_session *s) {
+    ton_session_destroy(s);
     free(s);
 }
 
-static struct ttt_session *
-tttmcctx_add_session(struct tttmcctx *ctx, int new_socket,
+static struct ton_session *
+tonmcctx_add_session(struct tonmcctx *ctx, int new_socket,
         struct sockaddr *addr, socklen_t addr_len, const unsigned char *key) {
-    struct ttt_session *s;
+    struct ton_session *s;
     int rc;
 
-    s = malloc(sizeof(struct ttt_session));
+    s = malloc(sizeof(struct ton_session));
     if (s == NULL) {
         return NULL;
     }
 
     /* Initialise a TLS session, which when we do the handshake will take the
-     * role of client. ttt_session doesn't need to know that new_socket hasn't
+     * role of client. ton_session doesn't need to know that new_socket hasn't
      * actually connected yet. */
-    rc = ttt_session_init(s, new_socket, addr, addr_len, true, false, key);
+    rc = ton_session_init(s, new_socket, addr, addr_len, true, false, key);
     if (rc < 0) {
         free(s);
         return NULL;
@@ -53,11 +53,11 @@ tttmcctx_add_session(struct tttmcctx *ctx, int new_socket,
 }
 
 void
-tttmcctx_destroy(struct tttmcctx *ctx) {
-    struct ttt_session *next;
-    for (struct ttt_session *s = ctx->sessions; s; s = next) {
+tonmcctx_destroy(struct tonmcctx *ctx) {
+    struct ton_session *next;
+    for (struct ton_session *s = ctx->sessions; s; s = next) {
         next = s->next;
-        tttmcctx_free_session(ctx, s);
+        tonmcctx_free_session(ctx, s);
     }
 }
 
@@ -71,11 +71,11 @@ make_async_connect_socket(struct sockaddr *addr, socklen_t addr_len) {
 
     sock = socket(addr->sa_family, SOCK_STREAM, 0);
     if (sock < 0) {
-        ttt_socket_error(0, "make_async_connect_socket: socket");
+        ton_socket_error(0, "make_async_connect_socket: socket");
         goto fail;
     }
 
-    ttt_make_socket_non_blocking(sock);
+    ton_make_socket_non_blocking(sock);
 
     rc = connect(sock, addr, addr_len);
     if (rc < 0) {
@@ -83,13 +83,13 @@ make_async_connect_socket(struct sockaddr *addr, socklen_t addr_len) {
 #ifdef WINDOWS
         err = WSAGetLastError();
         if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
-            ttt_socket_error(0, "make_async_connect_socket: connect");
+            ton_socket_error(0, "make_async_connect_socket: connect");
             goto fail;
         }
 #else
         err = errno;
         if (err != EAGAIN && err != EWOULDBLOCK && err != EINPROGRESS) {
-            ttt_socket_error(0, "make_async_connect_socket: connect");
+            ton_socket_error(0, "make_async_connect_socket: connect");
             goto fail;
         }
 #endif
@@ -104,21 +104,21 @@ fail:
 }
 
 void
-tttmcctx_set_verbose(struct tttmcctx *ctx, int value) {
+tonmcctx_set_verbose(struct tonmcctx *ctx, int value) {
     ctx->verbose = value;
 }
 
 int
-tttmcctx_init(struct tttmcctx *ctx) {
+tonmcctx_init(struct tonmcctx *ctx) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->sessions = NULL;
     return 0;
 }
 
 int
-tttmcctx_fdset_add_sockets(struct tttmcctx *ctx, fd_set *set) {
+tonmcctx_fdset_add_sockets(struct tonmcctx *ctx, fd_set *set) {
     int maxfd = -1;
-    for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
+    for (struct ton_session *s = ctx->sessions; s; s = s->next) {
         FD_SET(s->sock, set);
         if (s->sock > maxfd)
             maxfd = s->sock;
@@ -127,27 +127,27 @@ tttmcctx_fdset_add_sockets(struct tttmcctx *ctx, fd_set *set) {
 }
 
 int
-tttmcctx_fdset_contains_sockets(struct tttmcctx *ctx, fd_set *set) {
+tonmcctx_fdset_contains_sockets(struct tonmcctx *ctx, fd_set *set) {
     int count = 0;
-    for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
+    for (struct ton_session *s = ctx->sessions; s; s = s->next) {
         if (FD_ISSET(s->sock, set))
             count++;
     }
     return count;
 }
 
-struct ttt_session *
-tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr,
+struct ton_session *
+tonmcctx_add_connect(struct tonmcctx *ctx, struct sockaddr *addr,
         socklen_t addr_len, const unsigned char *key) {
     int sock = -1;
-    struct ttt_session *s;
+    struct ton_session *s;
 
     sock = make_async_connect_socket(addr, addr_len);
     if (sock < 0) {
         return NULL;
     }
 
-    s = tttmcctx_add_session(ctx, sock, addr, addr_len, key);
+    s = tonmcctx_add_session(ctx, sock, addr, addr_len, key);
     if (s == NULL) {
         close(sock);
         return NULL;
@@ -156,34 +156,34 @@ tttmcctx_add_connect(struct tttmcctx *ctx, struct sockaddr *addr,
     return s;
 }
 
-struct ttt_session *
-tttmcctx_run(struct tttmcctx *ctx, fd_set *writable_fds, fd_set *exception_fds) {
+struct ton_session *
+tonmcctx_run(struct tonmcctx *ctx, fd_set *writable_fds, fd_set *exception_fds) {
     int rc;
-    struct ttt_session *new_session = NULL;
-    struct ttt_session *next;
+    struct ton_session *new_session = NULL;
+    struct ton_session *next;
 
     /* If a connection attempt has succeeded then return it, otherwise
      * do nothing. */
-    for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
+    for (struct ton_session *s = ctx->sessions; s; s = s->next) {
         if (FD_ISSET(s->sock, writable_fds) || FD_ISSET(s->sock, exception_fds)) {
             int err;
             socklen_t err_len = sizeof(err);
             rc = getsockopt(s->sock, SOL_SOCKET, SO_ERROR, (char *) &err, &err_len);
             if (rc < 0) {
-                ttt_socket_error(0, "getsockopt SO_ERROR");
+                ton_socket_error(0, "getsockopt SO_ERROR");
                 s->failed = true;
             }
             else if (err != 0) {
                 /* Failed to connect */
                 if (ctx->verbose) {
-                    ttt_socket_error(0, "connect");
+                    ton_socket_error(0, "connect");
                 }
                 s->failed = true;
             }
             else {
                 /* Successfully connected. */
                 new_session = s;
-                ttt_session_remove_from_list(&ctx->sessions, new_session);
+                ton_session_remove_from_list(&ctx->sessions, new_session);
                 new_session->next = NULL;
                 break;
             }
@@ -191,18 +191,18 @@ tttmcctx_run(struct tttmcctx *ctx, fd_set *writable_fds, fd_set *exception_fds) 
     }
 
     /* Remove any failed sessions */
-    for (struct ttt_session *s = ctx->sessions; s; s = next) {
+    for (struct ton_session *s = ctx->sessions; s; s = next) {
         next = s->next;
         if (s->failed) {
-            ttt_session_remove_from_list(&ctx->sessions, s);
+            ton_session_remove_from_list(&ctx->sessions, s);
             s->next = NULL;
-            tttmcctx_free_session(ctx, s);
+            tonmcctx_free_session(ctx, s);
         }
     }
 
     /* If we're returning a new session, make the socket blocking. */
     if (new_session != NULL) {
-        ttt_make_socket_blocking(new_session->sock);
+        ton_make_socket_blocking(new_session->sock);
     }
 
     /* Return either the successfully-connected session, or NULL if there is no

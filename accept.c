@@ -24,22 +24,22 @@
 #include "session.h"
 
 static void
-tttacctx_free_session(struct tttacctx *ctx, struct ttt_session *s) {
-    ttt_session_destroy(s);
+tonacctx_free_session(struct tonacctx *ctx, struct ton_session *s) {
+    ton_session_destroy(s);
     free(s);
 }
 
-static struct ttt_session *
-tttacctx_add_session(struct tttacctx *ctx, int new_socket, struct sockaddr *addr, socklen_t addr_len) {
-    struct ttt_session *s;
+static struct ton_session *
+tonacctx_add_session(struct tonacctx *ctx, int new_socket, struct sockaddr *addr, socklen_t addr_len) {
+    struct ton_session *s;
     int rc;
 
-    s = malloc(sizeof(struct ttt_session));
+    s = malloc(sizeof(struct ton_session));
     if (s == NULL) {
         return NULL;
     }
 
-    rc = ttt_session_init(s, new_socket, addr, addr_len, ctx->use_tls, true,
+    rc = ton_session_init(s, new_socket, addr, addr_len, ctx->use_tls, true,
             ctx->use_tls ? ctx->session_key : NULL);
     if (rc < 0) {
         free(s);
@@ -53,13 +53,13 @@ tttacctx_add_session(struct tttacctx *ctx, int new_socket, struct sockaddr *addr
 }
 
 static void
-tttacctx_remove_session(struct tttacctx *ctx, struct ttt_session *target) {
-    ttt_session_remove_from_list(&ctx->sessions, target);
+tonacctx_remove_session(struct tonacctx *ctx, struct ton_session *target) {
+    ton_session_remove_from_list(&ctx->sessions, target);
 }
 
 void
-tttacctx_destroy(struct tttacctx *ctx) {
-    struct ttt_session *next;
+tonacctx_destroy(struct tonacctx *ctx) {
+    struct ton_session *next;
 
     if (ctx->listen_socket4 >= 0) {
         closesocket(ctx->listen_socket4);
@@ -68,9 +68,9 @@ tttacctx_destroy(struct tttacctx *ctx) {
         closesocket(ctx->listen_socket6);
     }
 
-    for (struct ttt_session *s = ctx->sessions; s; s = next) {
+    for (struct ton_session *s = ctx->sessions; s; s = next) {
         next = s->next;
-        tttacctx_free_session(ctx, s);
+        tonacctx_free_session(ctx, s);
     }
 }
 
@@ -98,7 +98,7 @@ make_listening_socket(int address_family, const char *listen_addr,
 
     rc = getaddrinfo(listen_addr, port_str, &hints, &listen_addrinfo);
     if (rc != 0) {
-        ttt_error(0, 0, "make_listening_socket: getaddrinfo: %s", gai_strerror(rc));
+        ton_error(0, 0, "make_listening_socket: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
@@ -106,13 +106,13 @@ make_listening_socket(int address_family, const char *listen_addr,
     listener = socket(listen_addrinfo->ai_family, listen_addrinfo->ai_socktype, listen_addrinfo->ai_protocol);
 
     if (listener < 0) {
-        ttt_socket_error(0, "make_listening_socket: socket");
+        ton_socket_error(0, "make_listening_socket: socket");
         goto fail;
     }
 
     rc = setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
     if (rc != 0) {
-        ttt_socket_error(0, "make_listening_socket: setsockopt(SO_REUSEADDR)");
+        ton_socket_error(0, "make_listening_socket: setsockopt(SO_REUSEADDR)");
         goto fail;
     }
 
@@ -120,30 +120,30 @@ make_listening_socket(int address_family, const char *listen_addr,
         /* Set IPV6_V6ONLY so we can bind an IPv4 socket to the same port */
         rc = setsockopt(listener, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &one, sizeof(one));
         if (rc != 0) {
-            ttt_socket_error(0, "make_listening_socket: setsockopt(IPV6_V6ONLY)");
+            ton_socket_error(0, "make_listening_socket: setsockopt(IPV6_V6ONLY)");
             goto fail;
         }
     }
 
     /* Make the listening socket non-blocking, and bind it to the listen
      * address and port. */
-    ttt_make_socket_non_blocking(listener);
+    ton_make_socket_non_blocking(listener);
 
     rc = bind(listener, listen_addrinfo->ai_addr, listen_addrinfo->ai_addrlen);
     if (rc != 0) {
-        ttt_socket_error(0, "make_listening_socket: bind");
+        ton_socket_error(0, "make_listening_socket: bind");
         goto fail;
     }
 
     rc = listen(listener, 10);
     if (rc != 0) {
-        ttt_socket_error(0, "make_listening_socket: listen");
+        ton_socket_error(0, "make_listening_socket: listen");
         goto fail;
     }
 
     rc = getsockname(listener, sockaddr, sockaddr_len);
     if (rc != 0) {
-        ttt_socket_error(0, "make_listening_socket: getsockname");
+        ton_socket_error(0, "make_listening_socket: getsockname");
         goto fail;
     }
 
@@ -160,7 +160,7 @@ fail:
 }
 
 int
-tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
+tonacctx_init(struct tonacctx *ctx, const char *listen_addr4,
         const char *listen_addr6, int address_families,
         unsigned short listen_port, bool use_tls, const char *passphrase,
         size_t passphrase_length, const unsigned char *salt, size_t salt_length) {
@@ -172,7 +172,7 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
     ctx->listen_socket6 = -1;
     ctx->use_tls = use_tls;
 
-    if (address_families & TTT_IPV4) {
+    if (address_families & TON_IPV4) {
         addr_len = sizeof(addr);
         ctx->listen_socket4 = make_listening_socket(AF_INET, listen_addr4,
                 listen_port, (struct sockaddr *) &addr, &addr_len);
@@ -182,7 +182,7 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
         ctx->listen_port4 = ntohs(((struct sockaddr_in *) &addr)->sin_port);
     }
 
-    if (address_families & TTT_IPV6) {
+    if (address_families & TON_IPV6) {
         addr_len = sizeof(addr);
         ctx->listen_socket6 = make_listening_socket(AF_INET6, listen_addr6,
                 listen_port, (struct sockaddr *) &addr, &addr_len);
@@ -192,19 +192,19 @@ tttacctx_init(struct tttacctx *ctx, const char *listen_addr4,
         ctx->listen_port6 = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
     }
 
-    if (ttt_passphrase_to_key(passphrase, passphrase_length, salt, salt_length, ctx->session_key, sizeof(ctx->session_key)) < 0) {
+    if (ton_passphrase_to_key(passphrase, passphrase_length, salt, salt_length, ctx->session_key, sizeof(ctx->session_key)) < 0) {
         goto fail;
     }
 
     return 0;
 
 fail:
-    tttacctx_destroy(ctx);
+    tonacctx_destroy(ctx);
     return -1;
 }
 
 unsigned short
-tttacctx_get_listen_port(struct tttacctx *ctx, int address_family) {
+tonacctx_get_listen_port(struct tonacctx *ctx, int address_family) {
     switch (address_family) {
         case AF_INET:
             return ctx->listen_port4;
@@ -216,11 +216,11 @@ tttacctx_get_listen_port(struct tttacctx *ctx, int address_family) {
 }
 
 int
-tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_session) {
+tonacctx_accept(struct tonacctx *ctx, int timeout_ms, struct ton_session *new_session) {
     int rc;
     struct timeval start;
     struct timeval end;
-    struct ttt_session *chosen_session = NULL;
+    struct ton_session *chosen_session = NULL;
     bool timed_out = false;
     int listeners[2];
 
@@ -256,7 +256,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
                     maxfd = listeners[f];
             }
         }
-        for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
+        for (struct ton_session *s = ctx->sessions; s; s = s->next) {
             if (s->want_read) {
                 /* We want to know when there's data to read on this socket */
                 FD_SET(s->sock, &readsockets);
@@ -282,12 +282,12 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         }
         else if (rc < 0) {
             /* Failure */
-            ttt_socket_error(0, "select");
+            ton_socket_error(0, "select");
             return rc;
         }
         else {
             /* Activity! */
-            struct ttt_session *next;
+            struct ton_session *next;
 
             /* Is there a new incoming connection? */
             for (int f = 0; f < 2; f++) {
@@ -299,7 +299,7 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
                     if (new_socket >= 0) {
                         /* We have accepted a new connection. Add this to our
                          * list of candidate sessions. */
-                        struct ttt_session *s = tttacctx_add_session(ctx, new_socket, (struct sockaddr *) &addr, addr_len);
+                        struct ton_session *s = tonacctx_add_session(ctx, new_socket, (struct sockaddr *) &addr, addr_len);
                         if (s != NULL) {
                             /* Add this to both fdsets so that we try to
                              * handshake with this session below. */
@@ -307,25 +307,25 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
                             s->want_write = true;
                             FD_SET(s->sock, &readsockets);
                             FD_SET(s->sock, &writesockets);
-                            ttt_make_socket_non_blocking(new_socket);
+                            ton_make_socket_non_blocking(new_socket);
                         }
                         else {
                             closesocket(new_socket);
                         }
                     }
                     else {
-                        ttt_socket_error(0, "accept");
+                        ton_socket_error(0, "accept");
                     }
                 }
             }
 
             /* Can progress be made on one of the existing sessions? */
-            for (struct ttt_session *s = ctx->sessions; s; s = s->next) {
+            for (struct ton_session *s = ctx->sessions; s; s = s->next) {
                 if ((s->want_read && FD_ISSET(s->sock, &readsockets)) ||
                         (s->want_write && FD_ISSET(s->sock, &writesockets))) {
                     s->want_read = 0;
                     s->want_write = 0;
-                    rc = ttt_session_handshake(s);
+                    rc = ton_session_handshake(s);
                     if (rc == 0) {
                         /* Handshake completed successfully - this is the
                          * session we'll use, closing all the others. */
@@ -343,13 +343,13 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
             }
 
             /* Remove any sessions whose handshake failed. */
-            for (struct ttt_session *s = ctx->sessions; s; s = next) {
+            for (struct ton_session *s = ctx->sessions; s; s = next) {
                 next = s->next;
                 if (s->failed) {
                     /* Remove this one from the list, close the socket and
                      * free its resources. */
-                    tttacctx_remove_session(ctx, s);
-                    tttacctx_free_session(ctx, s);
+                    tonacctx_remove_session(ctx, s);
+                    tonacctx_free_session(ctx, s);
                 }
             }
         }
@@ -362,9 +362,9 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
         new_session->next = NULL;
         new_session->make_blocking(new_session);
 
-        /* Remove this session from the list, so that tttacctx_destroy()
+        /* Remove this session from the list, so that tonacctx_destroy()
          * doesn't close it. */
-        tttacctx_remove_session(ctx, chosen_session);
+        tonacctx_remove_session(ctx, chosen_session);
         free(chosen_session);
         return 1;
     }
@@ -373,23 +373,23 @@ tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_se
     }
     else {
         /* What? */
-        ttt_error(0, 0, "tttacctx_accept() exited for some reason, but we neither got a valid session nor timed out?");
+        ton_error(0, 0, "tonacctx_accept() exited for some reason, but we neither got a valid session nor timed out?");
         return -1;
     }
 }
 
-#ifdef TTT_ACCEPT_MAIN
+#ifdef TON_ACCEPT_MAIN
 int main(int argc, char **argv) {
-    struct tttacctx ctx;
-    struct ttt_session new_session;
+    struct tonacctx ctx;
+    struct ton_session new_session;
     char peer_addr_str[256];
     char peer_port_str[20];
     int exit_status = 0;
     int rc;
 
     /* Listen on port 12345 */
-    if (tttacctx_init(&ctx, NULL, NULL, TTT_IP_BOTH, 12345, false)) {
-        ttt_error(1, 0, "tttacctx_init");
+    if (tonacctx_init(&ctx, NULL, NULL, TON_IP_BOTH, 12345, false)) {
+        ton_error(1, 0, "tonacctx_init");
     }
 
     /* Wait until we get a connection on that port.
@@ -403,7 +403,7 @@ int main(int argc, char **argv) {
      * message. In the finished tool, instead of printing a message we'd
      * send another announcement datagram asking our other end to connect
      * to us. */
-    while ((rc = tttacctx_accept(&ctx, 1000, &new_session)) == 0) {
+    while ((rc = tonacctx_accept(&ctx, 1000, &new_session)) == 0) {
         printf("Waiting...\n");
     }
 
@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
                 NI_NUMERICHOST | NI_NUMERICSERV);
 
         if (rc != 0) {
-            ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+            ton_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
             exit_status = 1;
         }
         else {
@@ -424,7 +424,7 @@ int main(int argc, char **argv) {
         new_session.write(&new_session, "Thanks, now go away.\n", 21);
         new_session.destroy(&new_session);
     }
-    tttacctx_destroy(&ctx);
+    tonacctx_destroy(&ctx);
 
     return exit_status;
 }

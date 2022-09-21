@@ -1,5 +1,5 @@
-#ifndef _TTTSESSION_H
-#define _TTTSESSION_H
+#ifndef _TONSESSION_H
+#define _TONSESSION_H
 
 #ifdef WINDOWS
 #include <winsock2.h>
@@ -18,7 +18,7 @@
 /* Hello message contains 12 bytes, all in network byte order...
  *
  * Bytes   Type        Description
- * 0-3     int32       Magic number 0x54545448 ("TTTH")
+ * 0-3     int32       Magic number 0x544f4e48 ("TONH")
  * 4-5     int16       Minimum supported protocol version
  * 6-7     int16       Maximum supported protocol version
  * 8-11    int32       Flags (reserved for future use, currently 0)
@@ -43,24 +43,24 @@
  * optional features without having to make a whole new protocol version every
  * time such an optional feature is added.
  */
-#define TTT_OUR_MIN_PROTOCOL_VERSION 1
-#define TTT_OUR_MAX_PROTOCOL_VERSION 1
+#define TON_OUR_MIN_PROTOCOL_VERSION 1
+#define TON_OUR_MAX_PROTOCOL_VERSION 1
 
-#define TTT_HELLO_SIZE 12
-#define TTT_HELLO_MAGIC 0x54545448
-#define TTT_HELLO_MAGIC_OFFSET 0
-#define TTT_HELLO_MIN_PROT_OFFSET 4
-#define TTT_HELLO_MAX_PROT_OFFSET 6
-#define TTT_HELLO_FLAGS_OFFSET 8
+#define TON_HELLO_SIZE 12
+#define TON_HELLO_MAGIC 0x544f4548
+#define TON_HELLO_MAGIC_OFFSET 0
+#define TON_HELLO_MIN_PROT_OFFSET 4
+#define TON_HELLO_MAX_PROT_OFFSET 6
+#define TON_HELLO_FLAGS_OFFSET 8
 
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing
  * only, the default will be encrypted when I've deciphered the OpenSSL docs. */
-struct ttt_session {
-    void (*destroy)(struct ttt_session *);
-    int (*write)(struct ttt_session *, const void *buf, size_t max);
-    int (*read)(struct ttt_session *, void *buf, size_t len);
-    int (*make_blocking)(struct ttt_session *s);
-    int (*handshake)(struct ttt_session *s);
+struct ton_session {
+    void (*destroy)(struct ton_session *);
+    int (*write)(struct ton_session *, const void *buf, size_t max);
+    int (*read)(struct ton_session *, void *buf, size_t len);
+    int (*make_blocking)(struct ton_session *s);
+    int (*handshake)(struct ton_session *s);
 
     /* The underlying socket */
     int sock;
@@ -76,9 +76,9 @@ struct ttt_session {
 
     /* Pre-SSL hello state, where the client sends its protocol version number
      * and the server replies with its protocol version number. */
-    unsigned char client_hello[TTT_HELLO_SIZE];
+    unsigned char client_hello[TON_HELLO_SIZE];
     int client_hello_pos;
-    unsigned char server_hello[TTT_HELLO_SIZE];
+    unsigned char server_hello[TON_HELLO_SIZE];
     int server_hello_pos;
 
     /* Negotiated protocol version */
@@ -92,7 +92,7 @@ struct ttt_session {
 
     /* Pre-shared key with which to encrypt and authenticate this session,
      * derived from the passphrase and a salt. */
-    unsigned char session_key[TTT_KEY_SIZE];
+    unsigned char session_key[TON_KEY_SIZE];
 
     /* True if this socket was born by accepting a connection from a listening
      * socket, false if it connected out to something. */
@@ -104,23 +104,23 @@ struct ttt_session {
 
     /* Used only during connection setup */
     bool want_read, want_write, failed;
-    struct ttt_session *next;
+    struct ton_session *next;
 };
 
 int
-ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_len, char *port_dest, int port_dest_len);
+ton_session_get_peer_addr(struct ton_session *s, char *addr_dest, int addr_dest_len, char *port_dest, int port_dest_len);
 
 int
-ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
+ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
         socklen_t addr_len, bool use_tls, bool is_server, const unsigned char *key);
 
 int
-ttt_session_handshake(struct ttt_session *s);
+ton_session_handshake(struct ton_session *s);
 
 void
-ttt_session_destroy(struct ttt_session *s);
+ton_session_destroy(struct ton_session *s);
 
 void
-ttt_session_remove_from_list(struct ttt_session **list_start, struct ttt_session *target);
+ton_session_remove_from_list(struct ton_session **list_start, struct ton_session *target);
 
 #endif

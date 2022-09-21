@@ -1,5 +1,5 @@
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -27,10 +27,10 @@ int main_test(int argc, char **argv) {
 
     CU_initialize_registry();
 
-    CALL_TEST_REG_FN(ttt_filetransfer_register_tests);
-    CALL_TEST_REG_FN(ttt_netif_register_tests);
-    CALL_TEST_REG_FN(ttt_utils_register_tests);
-    CALL_TEST_REG_FN(ttt_localfs_register_tests);
+    CALL_TEST_REG_FN(ton_filetransfer_register_tests);
+    CALL_TEST_REG_FN(ton_netif_register_tests);
+    CALL_TEST_REG_FN(ton_utils_register_tests);
+    CALL_TEST_REG_FN(ton_localfs_register_tests);
 
     rc = CU_basic_run_tests();
 

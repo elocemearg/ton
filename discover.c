@@ -29,15 +29,15 @@
 #include "accept.h"
 #include "connect.h"
 
-/* Magic number of discovery datagram: "TTT1" */
-#define TTT_DISCOVER_MAGIC 0x54545431UL
+/* Magic number of discovery datagram: "TON1" */
+#define TON_DISCOVER_MAGIC 0x544f4e31UL
 
 /* Magic number of encrypted part of discovery datagram, once decrypted:
- * "ttt1" */
-#define TTT_DISCOVER_MAGIC2 0x74747431UL
+ * "ton1" */
+#define TON_DISCOVER_MAGIC2 0x746f6e31UL
 
-#define TTT_ENC_PLAIN 0 /* not permitted by default */
-#define TTT_ENC_AES_256_CBC 1
+#define TON_ENC_PLAIN 0 /* not permitted by default */
+#define TON_ENC_AES_256_CBC 1
 
 #define DISCOVER_TIMESTAMP_TOLERANCE_SEC 300
 
@@ -46,10 +46,10 @@
 #define DISCOVER_RD_OFFSET_PLEN 7
 #define DISCOVER_RD_OFFSET_PAYLOAD 8
 /* Format of the UDP announcement datagram sent using broadcast and/or
- * multicast by the host running "ttt pull".
+ * multicast by the host running "ton pull".
  *
  * Raw datagram data is as follows. All integers are in network byte order.
- * A valid TTT announcement datagram is no more than 263 bytes.
+ * A valid TON announcement datagram is no more than 263 bytes.
  *
  * Position  Type      Description
  * 0-3       uint32    Magic number 0x54545431
@@ -90,7 +90,7 @@
  * later versions.
  */
 
-struct ttt_discover_result {
+struct ton_discover_result {
     uint32_t magic;
 
     /* Announcer chooses a random salt and uses that for the encryption of each
@@ -156,7 +156,7 @@ crc32(const char *data, size_t length) {
 static int
 validate_datagram(void *datagram, int datagram_length, const char *secret,
         size_t secret_length, int allow_unencrypted, int verbose,
-        struct ttt_discover_result *result) {
+        struct ton_discover_result *result) {
     unsigned long magic;
     unsigned long crc32_exp, crc32_obs;
     unsigned short enc;
@@ -170,7 +170,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
     if (datagram_length < 8 || datagram_length > 263) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: invalid length %d", datagram_length);
+            ton_error(0, 0, "validate_datagram: invalid length %d", datagram_length);
         return -1;
     }
 
@@ -179,55 +179,55 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     enc_payload_length = uint16_ntoh(datagram, DISCOVER_RD_OFFSET_PLEN - 1) & 0xff;
     enc_payload_start = ((char *) datagram) + DISCOVER_RD_OFFSET_PAYLOAD;
 
-    if (magic != TTT_DISCOVER_MAGIC) {
+    if (magic != TON_DISCOVER_MAGIC) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: first magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC, magic);
+            ton_error(0, 0, "validate_datagram: first magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TON_DISCOVER_MAGIC, magic);
         return -1;
     }
 
     if (enc != 0 && enc != 1) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: invalid encryption type %hu", enc);
+            ton_error(0, 0, "validate_datagram: invalid encryption type %hu", enc);
         return -1;
     }
 
     if (enc == 0) {
         if (!allow_unencrypted) {
             if (verbose)
-                ttt_error(0, 0, "validate_datagram: datagram is not encrypted, rejecting it.");
+                ton_error(0, 0, "validate_datagram: datagram is not encrypted, rejecting it.");
             return -1;
         }
         memcpy(payload, enc_payload_start, enc_payload_length);
         payload_length = enc_payload_length;
     }
     else {
-        payload_length = ttt_aes_256_cbc_decrypt(enc_payload_start,
+        payload_length = ton_aes_256_cbc_decrypt(enc_payload_start,
                 enc_payload_length, payload, sizeof(payload), secret,
                 secret_length, result->salt);
         if (payload_length < 0) {
             if (verbose)
-                ttt_error(0, 0, "validate_datagram: announcement not encrypted with expected passphrase");
+                ton_error(0, 0, "validate_datagram: announcement not encrypted with expected passphrase");
             return -1;
         }
     }
 
     if (verbose > 1) {
-        ttt_dump_hex(payload, payload_length, "decrypted payload");
+        ton_dump_hex(payload, payload_length, "decrypted payload");
     }
 
     magic = uint32_ntoh(payload, DISCOVER_P_OFFSET_MAGIC);
     crc32_exp = uint32_ntoh(payload, DISCOVER_P_OFFSET_CRC);
 
-    if (magic != TTT_DISCOVER_MAGIC2) {
+    if (magic != TON_DISCOVER_MAGIC2) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: second magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TTT_DISCOVER_MAGIC2, magic);
+            ton_error(0, 0, "validate_datagram: second magic number incorrect (expected 0x%08lx, observed 0x%08lx)", TON_DISCOVER_MAGIC2, magic);
         return -1;
     }
 
     crc32_obs = crc32(payload + DISCOVER_P_OFFSET_CRC_DATA_START, payload_length - DISCOVER_P_OFFSET_CRC_DATA_START);
     if (crc32_obs != crc32_exp) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: CRC32 incorrect (expected 0x%08lx, calculated 0x%08lx)", crc32_exp, crc32_obs);
+            ton_error(0, 0, "validate_datagram: CRC32 incorrect (expected 0x%08lx, calculated 0x%08lx)", crc32_exp, crc32_obs);
         return -1;
     }
 
@@ -236,7 +236,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     ts_diff = (unsigned long) (now & 0xFFFFFFFF) - datagram_timestamp;
     if (abs((int32_t)ts_diff) > DISCOVER_TIMESTAMP_TOLERANCE_SEC) {
         if (verbose)
-            ttt_error(0, 0, "validate_datagram: timestamp out of date, difference %d seconds", abs((int32_t) ts_diff));
+            ton_error(0, 0, "validate_datagram: timestamp out of date, difference %d seconds", abs((int32_t) ts_diff));
         return -1;
     }
 
@@ -256,12 +256,12 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
     int plain_payload_length;
     int encrypted_payload_length;
 
-    uint32_hton(dest, DISCOVER_RD_OFFSET_MAGIC, TTT_DISCOVER_MAGIC);
+    uint32_hton(dest, DISCOVER_RD_OFFSET_MAGIC, TON_DISCOVER_MAGIC);
     uint16_hton(dest, DISCOVER_RD_OFFSET_ENC, enc_type);
 
     memset(plain, 0, sizeof(plain));
-    uint32_hton(plain, DISCOVER_P_OFFSET_MAGIC, TTT_DISCOVER_MAGIC2);
-    ttt_set_random_bytes(plain + DISCOVER_P_OFFSET_RANDOM, 16);
+    uint32_hton(plain, DISCOVER_P_OFFSET_MAGIC, TON_DISCOVER_MAGIC2);
+    ton_set_random_bytes(plain + DISCOVER_P_OFFSET_RANDOM, 16);
     uint32_hton(plain, DISCOVER_P_OFFSET_TIMESTAMP, (uint32_t) (time(NULL) & 0xFFFFFFFF));
     uint16_hton(plain, DISCOVER_P_OFFSET_INV_PORT, invitation_port);
 
@@ -269,26 +269,26 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
 
     uint32_hton(plain, DISCOVER_P_OFFSET_CRC, crc32(plain + DISCOVER_P_OFFSET_CRC_DATA_START, plain_payload_length - DISCOVER_P_OFFSET_CRC_DATA_START));
 
-    if (enc_type == TTT_ENC_PLAIN) {
+    if (enc_type == TON_ENC_PLAIN) {
         if (dest_max < DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length) {
-            ttt_error(0, 0, "make_announce_datagram: dest_max is too small (%d < %d)", dest_max, DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length);
+            ton_error(0, 0, "make_announce_datagram: dest_max is too small (%d < %d)", dest_max, DISCOVER_RD_OFFSET_PAYLOAD + plain_payload_length);
             return -1;
         }
         memcpy(dest + DISCOVER_RD_OFFSET_PAYLOAD, plain, plain_payload_length);
         encrypted_payload_length = plain_payload_length;
     }
-    else if (enc_type == TTT_ENC_AES_256_CBC) {
-        encrypted_payload_length = ttt_aes_256_cbc_encrypt(plain,
+    else if (enc_type == TON_ENC_AES_256_CBC) {
+        encrypted_payload_length = ton_aes_256_cbc_encrypt(plain,
                 plain_payload_length, dest + DISCOVER_RD_OFFSET_PAYLOAD,
                 dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length,
                 salt8);
         if (encrypted_payload_length < 0) {
-            ttt_error(0, 0, "make_announce_datagram: ttt_aes_256_cbc_encrypt() failed");
+            ton_error(0, 0, "make_announce_datagram: ton_aes_256_cbc_encrypt() failed");
             return -1;
         }
     }
     else {
-        ttt_error(0, 0, "make_announce_datagram: unrecognised enc_type %d", enc_type);
+        ton_error(0, 0, "make_announce_datagram: unrecognised enc_type %d", enc_type);
         return -1;
     }
 
@@ -307,7 +307,7 @@ sockaddr_set_port(struct sockaddr *sa, PORT port) {
 }
 
 int
-make_multicast_receiver(struct ttt_discover_options *opts, int address_family,
+make_multicast_receiver(struct ton_discover_options *opts, int address_family,
         const char *multicast_addr_str, PORT port) {
     struct addrinfo hints;
     struct addrinfo *addrinfo = NULL;
@@ -330,7 +330,7 @@ make_multicast_receiver(struct ttt_discover_options *opts, int address_family,
 
     rc = getaddrinfo(NULL, port_str, &hints, &addrinfo);
     if (rc != 0) {
-        ttt_error(0, 0, "make_multicast_receiver: getaddrinfo: %s", gai_strerror(rc));
+        ton_error(0, 0, "make_multicast_receiver: getaddrinfo: %s", gai_strerror(rc));
         goto fail;
     }
 
@@ -338,12 +338,12 @@ make_multicast_receiver(struct ttt_discover_options *opts, int address_family,
      * datagrams sent to us on that port. */
     listener = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol);
     if (listener < 0) {
-        ttt_socket_error(0, "make_multicast_receiver: socket");
+        ton_socket_error(0, "make_multicast_receiver: socket");
         goto fail;
     }
 
     if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one)) != 0) {
-        ttt_socket_error(0, "make_multicast_receiver: setsockopt SO_REUSEADDR");
+        ton_socket_error(0, "make_multicast_receiver: setsockopt SO_REUSEADDR");
         goto fail;
     }
 
@@ -351,19 +351,19 @@ make_multicast_receiver(struct ttt_discover_options *opts, int address_family,
         /* Make this an IPv6-only socket, so we can bind to the same port
          * with an IPv4 socket. */
         if (setsockopt(listener, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &one, sizeof(one)) != 0) {
-            ttt_socket_error(0, "make_multicast_receiver: setsockopt IPV6_V6ONLY");
+            ton_socket_error(0, "make_multicast_receiver: setsockopt IPV6_V6ONLY");
         }
     }
 
     rc = bind(listener, addrinfo->ai_addr, addrinfo->ai_addrlen);
     if (rc != 0) {
-        ttt_socket_error(0, "make_multicast_receiver: bind");
+        ton_socket_error(0, "make_multicast_receiver: bind");
         goto fail;
     }
 
     rc = multicast_interfaces_subscribe(listener, multicast_addr_str, opts->include_global_addresses);
     if (rc <= 0) {
-        ttt_socket_error(0, "failed to join multicast group %s on any interface", multicast_addr_str);
+        ton_socket_error(0, "failed to join multicast group %s on any interface", multicast_addr_str);
         goto fail;
     }
 
@@ -382,18 +382,18 @@ fail:
 }
 
 /* Create receiving sockets in dlctx to listen for IPv4 and/or IPv6
- * announcement datagrams, as appropriate. Called by tttdlctx_init().
+ * announcement datagrams, as appropriate. Called by tondlctx_init().
  */
 static int
-tttdlctx_receive_enable(struct tttdlctx *dlctx, struct ttt_discover_options *opts) {
-    if (opts->address_families & TTT_IPV4) {
+tondlctx_receive_enable(struct tondlctx *dlctx, struct ton_discover_options *opts) {
+    if (opts->address_families & TON_IPV4) {
         dlctx->receivers[0] = make_multicast_receiver(opts, AF_INET, dlctx->multicast_address_ipv4, opts->discover_port);
         if (dlctx->receivers[0] < 0) {
             goto fail;
         }
     }
 
-    if (opts->address_families & TTT_IPV6) {
+    if (opts->address_families & TON_IPV6) {
         dlctx->receivers[1] = make_multicast_receiver(opts, AF_INET6, dlctx->multicast_address_ipv6, opts->discover_port);
         if (dlctx->receivers[1] < 0) {
             goto fail;
@@ -419,9 +419,9 @@ fail:
 }
 
 /* Close our receiving sockets if they're open, and unsubscribe them from the
- * relevant multicast groups. Called by tttdlctx_destroy(). */
+ * relevant multicast groups. Called by tondlctx_destroy(). */
 static void
-tttdlctx_receive_disable(struct tttdlctx *ctx) {
+tondlctx_receive_disable(struct tondlctx *ctx) {
     for (int i = 0; i < 2; i++) {
         if (ctx->receivers[i] >= 0) {
             multicast_interfaces_unsubscribe(ctx->receivers[i], i == 0 ? ctx->multicast_address_ipv4 : ctx->multicast_address_ipv6);
@@ -432,7 +432,7 @@ tttdlctx_receive_disable(struct tttdlctx *ctx) {
 }
 
 int
-tttdlctx_init(struct tttdlctx *ctx, struct ttt_discover_options *opts) {
+tondlctx_init(struct tondlctx *ctx, struct ton_discover_options *opts) {
     memset(ctx, 0, sizeof(*ctx));
 
     ctx->receivers[0] = ctx->receivers[1] = -1;
@@ -445,19 +445,19 @@ tttdlctx_init(struct tttdlctx *ctx, struct ttt_discover_options *opts) {
     if (ctx->multicast_address_ipv6 == NULL)
         goto fail;
 
-    if (tttdlctx_receive_enable(ctx, opts) < 0) {
+    if (tondlctx_receive_enable(ctx, opts) < 0) {
         goto fail;
     }
 
     return 0;
 
 fail:
-    tttdlctx_destroy(ctx);
+    tondlctx_destroy(ctx);
     return -1;
 }
 
 int
-tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr, bool ipv6) {
+tondlctx_set_multicast_addr(struct tondlctx *ctx, const char *addr, bool ipv6) {
     char *new_addr = strdup(addr);
     if (new_addr == NULL)
         return -1;
@@ -473,15 +473,15 @@ tttdlctx_set_multicast_addr(struct tttdlctx *ctx, const char *addr, bool ipv6) {
 }
 
 void
-tttdlctx_destroy(struct tttdlctx *ctx) {
-    tttdlctx_receive_disable(ctx);
+tondlctx_destroy(struct tondlctx *ctx) {
+    tondlctx_receive_disable(ctx);
     free(ctx->multicast_address_ipv4);
     free(ctx->multicast_address_ipv6);
 }
 
 
 int
-tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set) {
+tondlctx_fdset_add_receivers(struct tondlctx *ctx, fd_set *set) {
     int maxfd = -1;
     for (int i = 0; i < 2; ++i) {
         if (ctx->receivers[i] >= 0) {
@@ -494,7 +494,7 @@ tttdlctx_fdset_add_receivers(struct tttdlctx *ctx, fd_set *set) {
 }
 
 int
-tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set) {
+tondlctx_fdset_contains_receivers(struct tondlctx *ctx, fd_set *set) {
     for (int i = 0; i < 2; ++i) {
         if (ctx->receivers[i] >= 0 && FD_ISSET(ctx->receivers[i], set))
             return 1;
@@ -503,7 +503,7 @@ tttdlctx_fdset_contains_receivers(struct tttdlctx *ctx, fd_set *set) {
 }
 
 int
-tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
+tondlctx_receive(struct tondlctx *dlctx, struct ton_discover_options *opts,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
         PORT *invitation_port_r, unsigned char *salt, size_t *salt_len) {
     int rc;
@@ -524,7 +524,7 @@ tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
         }
         rc = select(maxfd + 1, &readfds, NULL, NULL, NULL);
         if (rc < 0) {
-            ttt_socket_error(0, "discover_listen: select");
+            ton_socket_error(0, "discover_listen: select");
             break;
         }
 
@@ -541,11 +541,11 @@ tttdlctx_receive(struct tttdlctx *dlctx, struct ttt_discover_options *opts,
 
             rc = recvfrom(listener, datagram, sizeof(datagram), 0, (struct sockaddr *) &peer_addr, &addr_len);
             if (rc < 0) {
-                ttt_socket_error(0, "discover_listen: recvfrom");
+                ton_socket_error(0, "discover_listen: recvfrom");
             }
             else {
-                struct ttt_discover_result result;
-                //ttt_dump_hex(datagram, rc, "received datagram");
+                struct ton_discover_result result;
+                //ton_dump_hex(datagram, rc, "received datagram");
                 if (validate_datagram(datagram, rc, opts->passphrase,
                             opts->passphrase_length, 0, opts->verbose,
                             &result) == 0) {
@@ -589,7 +589,7 @@ make_dgram_addr_info(const char *multicast_addr, PORT announce_port, struct addr
     snprintf(port_str, sizeof(port_str), "%hu", announce_port);
     rc = getaddrinfo(multicast_addr, port_str, &hints, res);
     if (rc != 0) {
-        ttt_error(0, 0, "discover_announce: getaddrinfo multicast: %s", gai_strerror(rc));
+        ton_error(0, 0, "discover_announce: getaddrinfo multicast: %s", gai_strerror(rc));
         return -1;
     }
     return 0;
@@ -634,7 +634,7 @@ static int get_udp_protocol_number(void) {
 }
 
 int
-tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
+tondactx_init(struct tondactx *dactx, struct ton_discover_options *opts) {
     int rc;
     int num_valid_sockets = 0;
 #ifdef WINDOWS
@@ -645,7 +645,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     int udp_proto_number = get_udp_protocol_number();
 
     if (udp_proto_number < 0) {
-        ttt_socket_error(0, "couldn't look up protocol number for UDP");
+        ton_socket_error(0, "couldn't look up protocol number for UDP");
         return -1;
     }
 
@@ -658,7 +658,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
 
     /* Think up a random salt to use with the encryption of announcement
      * packets, and encryption of the resulting session */
-    ttt_set_random_bytes((char *) dactx->session_salt, sizeof(dactx->session_salt));
+    ton_set_random_bytes((char *) dactx->session_salt, sizeof(dactx->session_salt));
 
     /* To maximise the chance of our announcement reaching our peer, we want
      * to try a broadcast packet on every interface on which we can broadcast,
@@ -666,40 +666,40 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
      * has a non-public IP address. The flags in announcement_types can inhibit
      * either of these. */
 
-    if (opts->announcement_types & TTT_ANNOUNCE_BROADCAST) {
+    if (opts->announcement_types & TON_ANNOUNCE_BROADCAST) {
         errno = 0;
-        dactx->broadcast_ifs = ttt_get_broadcast_ifs(opts->address_families, opts->include_global_addresses);
+        dactx->broadcast_ifs = ton_get_broadcast_ifs(opts->address_families, opts->include_global_addresses);
         if (dactx->broadcast_ifs == NULL && errno != 0) {
-            ttt_error(0, errno, "failed to get list of broadcast-enabled interfaces");
+            ton_error(0, errno, "failed to get list of broadcast-enabled interfaces");
         }
     }
 
-    if (opts->announcement_types & TTT_ANNOUNCE_MULTICAST) {
+    if (opts->announcement_types & TON_ANNOUNCE_MULTICAST) {
         errno = 0;
-        dactx->multicast_ifs = ttt_get_multicast_ifs(opts->address_families, opts->include_global_addresses);
+        dactx->multicast_ifs = ton_get_multicast_ifs(opts->address_families, opts->include_global_addresses);
         if (dactx->multicast_ifs == NULL && errno != 0) {
-            ttt_error(0, errno, "failed to get list of multicast-enabled interfaces");
+            ton_error(0, errno, "failed to get list of multicast-enabled interfaces");
         }
     }
 
     /* If we have no suitable interfaces, bail out early rather than failing
      * to announce loads of times... */
     if (dactx->multicast_ifs == NULL && dactx->broadcast_ifs == NULL) {
-        ttt_error(0, 0, "no suitable network interfaces found for announcement");
+        ton_error(0, 0, "no suitable network interfaces found for announcement");
         goto fail;
     }
 
     /* Initialise sockets to send broadcast packets on... */
-    for (struct ttt_netif *iface = dactx->broadcast_ifs; iface; iface = iface->next) {
+    for (struct ton_netif *iface = dactx->broadcast_ifs; iface; iface = iface->next) {
         if (iface->bc_valid) {
             iface->sock = socket(iface->family, SOCK_DGRAM, udp_proto_number);
             if (iface->sock < 0) {
-                ttt_socket_error(0, "socket");
+                ton_socket_error(0, "socket");
                 goto fail;
             }
             rc = setsockopt(iface->sock, SOL_SOCKET, SO_BROADCAST, (const char *) &one, sizeof(one));
             if (rc < 0) {
-                ttt_socket_error(0, "discover_announce: setsockopt SO_BROADCAST");
+                ton_socket_error(0, "discover_announce: setsockopt SO_BROADCAST");
                 goto fail;
             }
             sockaddr_set_port((struct sockaddr *) &iface->bc_addr, dactx->announce_port);
@@ -709,7 +709,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
              * address, so that if we have multiple addresses we sent an
              * announcement from each address. */
             if (bind(iface->sock, (struct sockaddr *) &iface->if_addr, iface->if_addr_len) < 0) {
-                ttt_socket_error(0, "failed to bind socket");
+                ton_socket_error(0, "failed to bind socket");
                 closesocket(iface->sock);
                 iface->sock = -1;
             }
@@ -718,10 +718,10 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     }
 
     /* ... and initialise sockets to send multicast packets on. */
-    for (struct ttt_netif *iface = dactx->multicast_ifs; iface; iface = iface->next) {
+    for (struct ton_netif *iface = dactx->multicast_ifs; iface; iface = iface->next) {
         iface->sock = socket(iface->family, SOCK_DGRAM, udp_proto_number);
         if (iface->sock < 0) {
-            ttt_socket_error(0, "socket");
+            ton_socket_error(0, "socket");
             goto fail;
         }
 
@@ -740,7 +740,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
         else if (iface->family == AF_INET6) {
             rc = setsockopt(iface->sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, (const char *) &iface->if_index_ipv6, sizeof(iface->if_index_ipv6));
             if (rc != 0) {
-                //ttt_socket_error(0, "failed to enable IPv6 socket for multicast traffic");
+                //ton_socket_error(0, "failed to enable IPv6 socket for multicast traffic");
                 closesocket(iface->sock);
                 iface->sock = -1;
             }
@@ -753,7 +753,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
                         (const char *) &opts->multicast_ttl,
                         sizeof(opts->multicast_ttl));
                 if (rc != 0) {
-                    ttt_socket_error(0, "tttdactx_init: setsockopt IP_MULTICAST_TTL");
+                    ton_socket_error(0, "tondactx_init: setsockopt IP_MULTICAST_TTL");
                 }
             }
 
@@ -761,7 +761,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
              * address, so that if we have multiple addresses we sent an
              * announcement from each address. */
             if (bind(iface->sock, (struct sockaddr *) &iface->if_addr, iface->if_addr_len) < 0) {
-                ttt_socket_error(0, "tttdactx_init: failed to bind socket");
+                ton_socket_error(0, "tondactx_init: failed to bind socket");
                 closesocket(iface->sock);
                 iface->sock = -1;
             }
@@ -770,7 +770,7 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     }
 
     if (num_valid_sockets == 0) {
-        ttt_socket_error(0, "no suitable network interfaces found for announcement. Last socket error was");
+        ton_socket_error(0, "no suitable network interfaces found for announcement. Last socket error was");
     }
 
     /* Get an addrinfo for our multicast group addresses, which we will be
@@ -783,12 +783,12 @@ tttdactx_init(struct tttdactx *dactx, struct ttt_discover_options *opts) {
     return 0;
 
 fail:
-    tttdactx_destroy(dactx);
+    tondactx_destroy(dactx);
     return -1;
 }
 
 int
-tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr, bool ipv6) {
+tondactx_set_multicast_addr(struct tondactx *ctx, const char *addr, bool ipv6) {
     char *new_addr = strdup(addr);
     if (new_addr == NULL)
         return -1;
@@ -804,7 +804,7 @@ tttdactx_set_multicast_addr(struct tttdactx *ctx, const char *addr, bool ipv6) {
 }
 
 void
-tttdactx_set_invitation_port(struct tttdactx *ctx, int sa_family, PORT port) {
+tondactx_set_invitation_port(struct tondactx *ctx, int sa_family, PORT port) {
     if (sa_family == AF_INET)
         ctx->invitation_port4 = port;
     else if (sa_family == AF_INET6)
@@ -812,7 +812,7 @@ tttdactx_set_invitation_port(struct tttdactx *ctx, int sa_family, PORT port) {
 }
 
 void
-tttdactx_destroy(struct tttdactx *ctx) {
+tondactx_destroy(struct tondactx *ctx) {
     free(ctx->multicast_address_ipv4);
     free(ctx->multicast_address_ipv6);
     if (ctx->multicast_addrinfo_ipv4 != NULL) {
@@ -821,12 +821,12 @@ tttdactx_destroy(struct tttdactx *ctx) {
     if (ctx->multicast_addrinfo_ipv6 != NULL) {
         freeaddrinfo(ctx->multicast_addrinfo_ipv6);
     }
-    ttt_netif_list_free(ctx->broadcast_ifs, 1);
-    ttt_netif_list_free(ctx->multicast_ifs, 1);
+    ton_netif_list_free(ctx->broadcast_ifs, 1);
+    ton_netif_list_free(ctx->multicast_ifs, 1);
 }
 
 int
-tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
+tondactx_announce(struct tondactx *dactx, struct ton_discover_options *opts) {
     int num_sockets_succeeded = 0;
     int addr_families[2] = { AF_INET6, AF_INET };
     PORT invitation_ports[2] = { dactx->invitation_port6, dactx->invitation_port4 };
@@ -843,9 +843,9 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
 
         datagram_length = make_announce_datagram(datagram, sizeof(datagram),
                 opts->passphrase, opts->passphrase_length,
-                TTT_ENC_AES_256_CBC, invitation_port, dactx->session_salt);
+                TON_ENC_AES_256_CBC, invitation_port, dactx->session_salt);
         if (datagram_length < 0) {
-            ttt_error(0, errno, "discover_announce: failed to build datagram");
+            ton_error(0, errno, "discover_announce: failed to build datagram");
             return -1;
         }
 
@@ -853,14 +853,14 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
          * multicast-enabled interfaces, and send an announcement datagram on
          * the socket we've opened for each of them. */
         for (int type = 0; type < 2; ++type) {
-            struct ttt_netif *list = (type == 0 ? dactx->broadcast_ifs : dactx->multicast_ifs);
+            struct ton_netif *list = (type == 0 ? dactx->broadcast_ifs : dactx->multicast_ifs);
 
-            if (list == dactx->broadcast_ifs && (opts->announcement_types & TTT_ANNOUNCE_BROADCAST) == 0)
+            if (list == dactx->broadcast_ifs && (opts->announcement_types & TON_ANNOUNCE_BROADCAST) == 0)
                 continue;
-            if (list == dactx->multicast_ifs && (opts->announcement_types & TTT_ANNOUNCE_MULTICAST) == 0)
+            if (list == dactx->multicast_ifs && (opts->announcement_types & TON_ANNOUNCE_MULTICAST) == 0)
                 continue;
 
-            for (struct ttt_netif *iface = list; !callback_aborted && iface; iface = iface->next) {
+            for (struct ton_netif *iface = list; !callback_aborted && iface; iface = iface->next) {
                 ssize_t bytes_sent;
                 struct sockaddr *sa;
                 int sa_len;
@@ -902,19 +902,19 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
                     if ((rc = getnameinfo((struct sockaddr *) &iface->if_addr,
                                 iface->if_addr_len, addr_str, sizeof(addr_str),
                                 NULL, 0, NI_NUMERICHOST | NI_NUMERICSERV)) < 0) {
-                        ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+                        ton_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
                     }
                     else {
-                        ttt_error(0, 0, "announced from %s", addr_str);
+                        ton_error(0, 0, "announced from %s", addr_str);
                     }
                 }
 
                 bytes_sent = sendto(iface->sock, datagram, datagram_length, 0, sa, sa_len);
                 if (bytes_sent < 0) {
-                    ttt_socket_error(0, "discover_announce: sendto");
+                    ton_socket_error(0, "discover_announce: sendto");
                 }
                 else if (bytes_sent < datagram_length) {
-                    ttt_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
+                    ton_error(0, 0, "discover_announce: expected to send %d bytes but only sent %d", datagram_length, (int) bytes_sent);
                 }
                 else {
                     if (opts->sent_announcement_cb != NULL) {
@@ -926,7 +926,7 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
                                 iface->if_addr_len, sa, sa_len
                         );
                         if (rc != 0) {
-                            ttt_error(0, 0, "announcements aborted");
+                            ton_error(0, 0, "announcements aborted");
                             callback_aborted = true;
                         }
                     }
@@ -943,36 +943,36 @@ tttdactx_announce(struct tttdactx *dactx, struct ttt_discover_options *opts) {
 
     /* Return -1 (failure) if every attempt to send failed. */
     if (num_sockets_succeeded == 0) {
-        ttt_error(0, 0, "failed to send announcement on any socket");
+        ton_error(0, 0, "failed to send announcement on any socket");
     }
     return num_sockets_succeeded == 0 ? -1 : 0;
 }
 
 
 int
-ttt_discover_options_init(struct ttt_discover_options *opts, const char *passphrase, int passphrase_length) {
+ton_discover_options_init(struct ton_discover_options *opts, const char *passphrase, int passphrase_length) {
     memset(opts, 0, sizeof(*opts));
-    opts->multicast_address_ipv4 = strdup(TTT_MULTICAST_GROUP_IPV4);
-    opts->multicast_address_ipv6 = strdup(TTT_MULTICAST_GROUP_IPV6);
+    opts->multicast_address_ipv4 = strdup(TON_MULTICAST_GROUP_IPV4);
+    opts->multicast_address_ipv6 = strdup(TON_MULTICAST_GROUP_IPV6);
     opts->passphrase = malloc(passphrase_length + 1);
     memcpy(opts->passphrase, passphrase, passphrase_length);
     opts->passphrase[passphrase_length] = '\0';
     opts->passphrase_length = passphrase_length;
-    opts->discover_port = TTT_DEFAULT_DISCOVER_PORT;
-    opts->listen_port = TTT_DEFAULT_LISTEN_PORT;
+    opts->discover_port = TON_DEFAULT_DISCOVER_PORT;
+    opts->listen_port = TON_DEFAULT_LISTEN_PORT;
     opts->max_announcements = 0;
     opts->announcement_interval_ms = 1000;
     opts->multicast_ttl = 0;
-    opts->address_families = TTT_IP_BOTH;
-    opts->announcement_types = TTT_ANNOUNCE_BOTH;
+    opts->address_families = TON_IP_BOTH;
+    opts->announcement_types = TON_ANNOUNCE_BOTH;
     return 0;
 }
 
-/* ttt_discover_options option setters */
+/* ton_discover_options option setters */
 int
-ttt_discover_set_multicast_ipv4_address(struct ttt_discover_options *opts, const char *addr) {
+ton_discover_set_multicast_ipv4_address(struct ton_discover_options *opts, const char *addr) {
     if (addr == NULL)
-        addr = TTT_MULTICAST_GROUP_IPV4;
+        addr = TON_MULTICAST_GROUP_IPV4;
     if (opts->multicast_address_ipv4)
         free(opts->multicast_address_ipv4);
     opts->multicast_address_ipv4 = strdup(addr);
@@ -980,9 +980,9 @@ ttt_discover_set_multicast_ipv4_address(struct ttt_discover_options *opts, const
 }
 
 int
-ttt_discover_set_multicast_ipv6_address(struct ttt_discover_options *opts, const char *addr) {
+ton_discover_set_multicast_ipv6_address(struct ton_discover_options *opts, const char *addr) {
     if (addr == NULL)
-        addr = TTT_MULTICAST_GROUP_IPV6;
+        addr = TON_MULTICAST_GROUP_IPV6;
     if (opts->multicast_address_ipv6)
         free(opts->multicast_address_ipv6);
     opts->multicast_address_ipv6 = strdup(addr);
@@ -990,71 +990,71 @@ ttt_discover_set_multicast_ipv6_address(struct ttt_discover_options *opts, const
 }
 
 void
-ttt_discover_set_address_families(struct ttt_discover_options *opts, int f) {
+ton_discover_set_address_families(struct ton_discover_options *opts, int f) {
     switch (f) {
-        case TTT_IPV4_ONLY:
-        case TTT_IPV6_ONLY:
-        case TTT_IP_BOTH:
+        case TON_IPV4_ONLY:
+        case TON_IPV6_ONLY:
+        case TON_IP_BOTH:
             opts->address_families = f;
             break;
     }
 }
 
 void
-ttt_discover_set_announcement_types(struct ttt_discover_options *opts, int a) {
+ton_discover_set_announcement_types(struct ton_discover_options *opts, int a) {
     switch (a) {
-        case TTT_ANNOUNCE_BROADCAST_ONLY:
-        case TTT_ANNOUNCE_MULTICAST_ONLY:
-        case TTT_ANNOUNCE_BOTH:
+        case TON_ANNOUNCE_BROADCAST_ONLY:
+        case TON_ANNOUNCE_MULTICAST_ONLY:
+        case TON_ANNOUNCE_BOTH:
             opts->announcement_types = a;
             break;
     }
 }
 
 void
-ttt_discover_set_listen_port(struct ttt_discover_options *opts, int port) {
+ton_discover_set_listen_port(struct ton_discover_options *opts, int port) {
     if (port >= 0)
         opts->listen_port = port;
     else
-        opts->listen_port = TTT_DEFAULT_LISTEN_PORT;
+        opts->listen_port = TON_DEFAULT_LISTEN_PORT;
 }
 
 void
-ttt_discover_set_discover_port(struct ttt_discover_options *opts, int port) {
+ton_discover_set_discover_port(struct ton_discover_options *opts, int port) {
     if (port > 0)
         opts->discover_port = port;
     else
-        opts->discover_port = TTT_DEFAULT_DISCOVER_PORT;
+        opts->discover_port = TON_DEFAULT_DISCOVER_PORT;
 }
 
 void
-ttt_discover_set_verbose(struct ttt_discover_options *opts, int verbose) {
+ton_discover_set_verbose(struct ton_discover_options *opts, int verbose) {
     opts->verbose = verbose;
 }
 
 void
-ttt_discover_set_listening_callback(struct ttt_discover_options *opts,
-        tttdl_listening_cb listening_cb, void *cookie) {
+ton_discover_set_listening_callback(struct ton_discover_options *opts,
+        tondl_listening_cb listening_cb, void *cookie) {
     opts->listening_cb = listening_cb;
     opts->listening_cb_cookie = cookie;
 }
 
 void
-ttt_discover_set_received_announcement_callback(struct ttt_discover_options *opts,
-        tttdl_received_announcement_cb received_announcement_cb, void *cookie) {
+ton_discover_set_received_announcement_callback(struct ton_discover_options *opts,
+        tondl_received_announcement_cb received_announcement_cb, void *cookie) {
     opts->received_announcement_cb = received_announcement_cb;
     opts->received_announcement_cb_cookie = cookie;
 }
 
 void
-ttt_discover_set_sent_announcement_callback(struct ttt_discover_options *opts,
-        tttda_sent_announcement_cb sent_announcement_cb, void *cookie) {
+ton_discover_set_sent_announcement_callback(struct ton_discover_options *opts,
+        tonda_sent_announcement_cb sent_announcement_cb, void *cookie) {
     opts->sent_announcement_cb = sent_announcement_cb;
     opts->sent_announcement_cb_cookie = cookie;
 }
 
 void
-ttt_discover_set_announcements(struct ttt_discover_options *opts,
+ton_discover_set_announcements(struct ton_discover_options *opts,
         int max_announcements, int announcement_interval_ms) {
     opts->max_announcements = max_announcements;
 
@@ -1066,22 +1066,22 @@ ttt_discover_set_announcements(struct ttt_discover_options *opts,
 }
 
 void
-ttt_discover_set_multicast_ttl(struct ttt_discover_options *opts, int ttl) {
+ton_discover_set_multicast_ttl(struct ton_discover_options *opts, int ttl) {
     opts->multicast_ttl = ttl;
 }
 
 void
-ttt_discover_set_include_global_addresses(struct ttt_discover_options *opts, bool include_global) {
+ton_discover_set_include_global_addresses(struct ton_discover_options *opts, bool include_global) {
     opts->include_global_addresses = include_global;
 }
 
 void
-ttt_discover_set_connect_timeout(struct ttt_discover_options *opts, int timeout_ms) {
+ton_discover_set_connect_timeout(struct ton_discover_options *opts, int timeout_ms) {
     opts->discover_connect_timeout_ms = timeout_ms;
 }
 
 void
-ttt_discover_options_destroy(struct ttt_discover_options *opts) {
+ton_discover_options_destroy(struct ton_discover_options *opts) {
     if (opts) {
         free(opts->multicast_address_ipv4);
         free(opts->multicast_address_ipv6);
@@ -1090,9 +1090,9 @@ ttt_discover_options_destroy(struct ttt_discover_options *opts) {
 }
 
 int
-ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *new_sess) {
-    struct tttdlctx dlctx;
-    struct tttmcctx mcctx;
+ton_discover_and_connect(struct ton_discover_options *opts, struct ton_session *new_sess) {
+    struct tondlctx dlctx;
+    struct tonmcctx mcctx;
     bool ctx_valid = false;
     struct sockaddr_storage peer_addr;
     int peer_addr_len = sizeof(peer_addr);
@@ -1104,8 +1104,8 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
 
     /* Initialise a discovery listen context */
     memset(&dlctx, 0, sizeof(dlctx));
-    if (tttdlctx_init(&dlctx, opts) != 0) {
-        ttt_error(0, errno, "failed to initialise listen context");
+    if (tondlctx_init(&dlctx, opts) != 0) {
+        ton_error(0, errno, "failed to initialise listen context");
         return -1;
     }
     ctx_valid = true;
@@ -1121,16 +1121,16 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
 
     /* Initialise a multi-connect context, which is a glorified list of
      * partially-set-up non-blocking outgoing connection attempts. */
-    tttmcctx_init(&mcctx);
-    tttmcctx_set_verbose(&mcctx, opts->verbose);
+    tonmcctx_init(&mcctx);
+    tonmcctx_set_verbose(&mcctx, opts->verbose);
 
     /* If we're using any multicast addresses other than the defaults, set
      * them now. */
     if (opts->multicast_address_ipv4) {
-        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv4, false);
+        tondlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv4, false);
     }
     if (opts->multicast_address_ipv6) {
-        tttdlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv6, true);
+        tondlctx_set_multicast_addr(&dlctx, opts->multicast_address_ipv6, true);
     }
 
     do {
@@ -1142,9 +1142,9 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         FD_ZERO(&writefds);
         FD_ZERO(&exceptfds);
 
-        max_receiver_fd = tttdlctx_fdset_add_receivers(&dlctx, &readfds);
-        max_connector_fd = tttmcctx_fdset_add_sockets(&mcctx, &writefds);
-        tttmcctx_fdset_add_sockets(&mcctx, &exceptfds);
+        max_receiver_fd = tondlctx_fdset_add_receivers(&dlctx, &readfds);
+        max_connector_fd = tonmcctx_fdset_add_sockets(&mcctx, &writefds);
+        tonmcctx_fdset_add_sockets(&mcctx, &exceptfds);
 
         if (max_receiver_fd > max_connector_fd)
             maxfd = max_receiver_fd;
@@ -1164,53 +1164,53 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
         /* Wait for any new announcements (readfds) or any outgoing connection
          * attempts which have finished (writefds/exceptfds). */
         if ((rc = select(maxfd + 1, &readfds, &writefds, &exceptfds, timeoutp)) < 0) {
-            ttt_error(0, 0, "select");
+            ton_error(0, 0, "select");
         }
 
         if (rc == 0) {
             /* Timed out waiting for a valid announcement or waiting to make
              * a successful connection. */
-            ttt_error(0, 0, "timed out");
+            ton_error(0, 0, "timed out");
             goto fail;
         }
 
-        if (tttdlctx_fdset_contains_receivers(&dlctx, &readfds)) {
+        if (tondlctx_fdset_contains_receivers(&dlctx, &readfds)) {
             unsigned char salt[8];
             size_t salt_len = sizeof(salt);
-            unsigned char key[TTT_KEY_SIZE];
+            unsigned char key[TON_KEY_SIZE];
 
             /* Listen until we receive a valid UDP datagram which was encrypted
              * with our secret. This datagram, when decrypted, tells us which
              * port to make a TCP connection to. */
-            rc = tttdlctx_receive(&dlctx, opts, &peer_addr, &peer_addr_len,
+            rc = tondlctx_receive(&dlctx, opts, &peer_addr, &peer_addr_len,
                     &peer_invitation_port, salt, &salt_len);
             if (rc != 0) {
-                ttt_error(0, 0, "tttdctx_receive failed.");
+                ton_error(0, 0, "tondctx_receive failed.");
                 goto fail;
             }
 
             /* Connect to the host that sent us the valid announcement on
-             * the port it specified, by adding to our tttmcctx context. This
+             * the port it specified, by adding to our tonmcctx context. This
              * will deal with multiple outgoing non-blocking connections. */
-            ttt_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
+            ton_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
 
-            ttt_passphrase_to_key(opts->passphrase, opts->passphrase_length,
+            ton_passphrase_to_key(opts->passphrase, opts->passphrase_length,
                     salt, salt_len, key, sizeof(key));
 
-            tttmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len, key);
+            tonmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len, key);
         }
 
-        if (tttmcctx_fdset_contains_sockets(&mcctx, &writefds) ||
-                tttmcctx_fdset_contains_sockets(&mcctx, &exceptfds)) {
-            struct ttt_session *s = tttmcctx_run(&mcctx, &writefds, &exceptfds);
+        if (tonmcctx_fdset_contains_sockets(&mcctx, &writefds) ||
+                tonmcctx_fdset_contains_sockets(&mcctx, &exceptfds)) {
+            struct ton_session *s = tonmcctx_run(&mcctx, &writefds, &exceptfds);
             if (s != NULL) {
                 /* One of our outgoing connections successfully connected.
                  * Now block waiting for the handshake to succeed or fail. */
-                if (ttt_session_handshake(s) != 0) {
+                if (ton_session_handshake(s) != 0) {
                     /* Handshake failed. Carry on waiting for announcements
                      * and completion of outgoing connections. */
-                    ttt_error(0, 0, "handshake failed");
-                    ttt_session_destroy(s);
+                    ton_error(0, 0, "handshake failed");
+                    ton_session_destroy(s);
                 }
                 else {
                     /* Handshake succeeded. This is our new session, and we'll
@@ -1229,8 +1229,8 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
          * announced to us, go round and listen for announcements again. */
     } while (!handshake_completed);
 
-    tttdlctx_destroy(&dlctx);
-    tttmcctx_destroy(&mcctx);
+    tondlctx_destroy(&dlctx);
+    tonmcctx_destroy(&mcctx);
     ctx_valid = false;
 
     /* If we get here, we have discovered our peer and successfully established
@@ -1239,17 +1239,17 @@ ttt_discover_and_connect(struct ttt_discover_options *opts, struct ttt_session *
 
 fail:
     if (ctx_valid) {
-        tttdlctx_destroy(&dlctx);
-        tttmcctx_destroy(&mcctx);
+        tondlctx_destroy(&dlctx);
+        tonmcctx_destroy(&mcctx);
     }
     return -1;
 }
 
 int
-ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *new_sess) {
-    struct tttdactx dactx;
+ton_discover_and_accept(struct ton_discover_options *opts, struct ton_session *new_sess) {
+    struct tondactx dactx;
     bool dactx_valid = false;
-    struct tttacctx acctx;
+    struct tonacctx acctx;
     bool acctx_valid = false;
     int announcement;
     char peer_addr_str[100];
@@ -1266,13 +1266,13 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
      * this passphrase to connect to. */
     memset(&dactx, 0, sizeof(dactx));
     memset(&acctx, 0, sizeof(acctx));
-    if (tttdactx_init(&dactx, opts) != 0) {
+    if (tondactx_init(&dactx, opts) != 0) {
         goto fail;
     }
     dactx_valid = true;
 
     /* Open our listening TCP socket on the invitation port. */
-    if (tttacctx_init(&acctx, NULL, NULL, opts->address_families,
+    if (tonacctx_init(&acctx, NULL, NULL, opts->address_families,
                 opts->listen_port, use_tls, opts->passphrase,
                 opts->passphrase_length, dactx.session_salt,
                 sizeof(dactx.session_salt)) < 0) {
@@ -1280,26 +1280,26 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
     }
     acctx_valid = true;
 
-    invitation_port4 = tttacctx_get_listen_port(&acctx, AF_INET);
-    invitation_port6 = tttacctx_get_listen_port(&acctx, AF_INET6);
+    invitation_port4 = tonacctx_get_listen_port(&acctx, AF_INET);
+    invitation_port6 = tonacctx_get_listen_port(&acctx, AF_INET6);
 
-    tttdactx_set_invitation_port(&dactx, AF_INET, invitation_port4);
-    tttdactx_set_invitation_port(&dactx, AF_INET6, invitation_port6);
+    tondactx_set_invitation_port(&dactx, AF_INET, invitation_port4);
+    tondactx_set_invitation_port(&dactx, AF_INET6, invitation_port6);
 
     /* Set the multicast addresses if required, but usually these are expected
      * to stay as their defaults. */
     if (opts->multicast_address_ipv4) {
-        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv4, false);
+        tondactx_set_multicast_addr(&dactx, opts->multicast_address_ipv4, false);
     }
     if (opts->multicast_address_ipv6) {
-        tttdactx_set_multicast_addr(&dactx, opts->multicast_address_ipv6, true);
+        tondactx_set_multicast_addr(&dactx, opts->multicast_address_ipv6, true);
     }
 
     if (opts->verbose) {
         if (invitation_port4)
-            ttt_error(0, 0, "IPv4: waiting for incoming connection on port %d...\n", invitation_port4);
+            ton_error(0, 0, "IPv4: waiting for incoming connection on port %d...\n", invitation_port4);
         if (invitation_port6)
-            ttt_error(0, 0, "IPv6: waiting for incoming connection on port %d...\n", invitation_port6);
+            ton_error(0, 0, "IPv6: waiting for incoming connection on port %d...\n", invitation_port6);
     }
 
     /* Send a number of announcements, with a suitable time gap in between.
@@ -1317,7 +1317,7 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
              * announcement_gap_ms milliseconds go by with nobody connecting to
              * us and completing a handshake, time out and make another UDP
              * announcement. */
-            rc = tttacctx_accept(&acctx, opts->announcement_interval_ms, new_sess);
+            rc = tonacctx_accept(&acctx, opts->announcement_interval_ms, new_sess);
             if (rc < 0) {
                 goto fail;
             }
@@ -1329,7 +1329,7 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
                  * the correct port and successfully handshook with us. */
                 new_sess_valid = true;
                 if (opts->verbose) {
-                    if (ttt_session_get_peer_addr(new_sess, peer_addr_str, sizeof(peer_addr_str), peer_addr_port, sizeof(peer_addr_port)) == 0) {
+                    if (ton_session_get_peer_addr(new_sess, peer_addr_str, sizeof(peer_addr_str), peer_addr_port, sizeof(peer_addr_port)) == 0) {
                         fprintf(stderr, "Accepted connection from %s:%s\n", peer_addr_str, peer_addr_port);
                     }
                 }
@@ -1340,7 +1340,7 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
         /* No successful incoming connection yet, so send out another
          * broadcast/multicast announcement inviting anyone who decrypts
          * it to connect to us. */
-        rc = tttdactx_announce(&dactx, opts);
+        rc = tondactx_announce(&dactx, opts);
         if (rc != 0) {
             num_failed_announcements++;
             if (num_failed_announcements > max_failed_announcements) {
@@ -1351,9 +1351,9 @@ ttt_discover_and_accept(struct ttt_discover_options *opts, struct ttt_session *n
 
 end:
     if (dactx_valid)
-        tttdactx_destroy(&dactx);
+        tondactx_destroy(&dactx);
     if (acctx_valid)
-        tttacctx_destroy(&acctx);
+        tonacctx_destroy(&acctx);
 
     if (new_sess_valid)
         return 0;
@@ -1362,7 +1362,7 @@ end:
 
 fail:
     if (new_sess_valid) {
-        ttt_session_destroy(new_sess);
+        ton_session_destroy(new_sess);
         new_sess_valid = 0;
     }
     goto end;

@@ -24,10 +24,10 @@
 #include "encryption.h"
 
 /* Mapping of SSL to session key */
-struct ttt_session_key {
+struct ton_session_key {
     SSL *ssl;
-    unsigned char session_key[TTT_KEY_SIZE];
-    struct ttt_session_key *next;
+    unsigned char session_key[TON_KEY_SIZE];
+    struct ton_session_key *next;
 };
 
 /* Global list of all SSL objects we've created, and the session key we
@@ -35,30 +35,30 @@ struct ttt_session_key {
  * don't have arbitrary pointer arguments for us to pass things in like the
  * passphrase or salt, but they do have the SSL pointer passed in.
  *
- * When we create a ttt_session with an SSL session in it, we add an entry
+ * When we create a ton_session with an SSL session in it, we add an entry
  * to the list associating the SSL session with the key. Then the psk_client_cb
  * or psk_server_cb callback can look up the key.
  *
  * Note that these functions are not (yet) thread safe. */
-struct ttt_session_key *ttt_session_key_list = NULL;
+struct ton_session_key *ton_session_key_list = NULL;
 
 /* Add a new SSL -> key association to the global list. */
-static const struct ttt_session_key *
-ttt_set_session_key(SSL *ssl, const unsigned char *session_key) {
-    struct ttt_session_key *k = malloc(sizeof(struct ttt_session_key));
+static const struct ton_session_key *
+ton_set_session_key(SSL *ssl, const unsigned char *session_key) {
+    struct ton_session_key *k = malloc(sizeof(struct ton_session_key));
     if (k == NULL)
         return NULL;
-    memcpy(k->session_key, session_key, TTT_KEY_SIZE);
+    memcpy(k->session_key, session_key, TON_KEY_SIZE);
     k->ssl = ssl;
-    k->next = ttt_session_key_list;
-    ttt_session_key_list = k;
+    k->next = ton_session_key_list;
+    ton_session_key_list = k;
     return k;
 }
 
 /* Look up a key given the SSL pointer. */
-static const struct ttt_session_key *
-ttt_find_session_key(SSL *ssl) {
-    for (struct ttt_session_key *k = ttt_session_key_list; k; k = k->next) {
+static const struct ton_session_key *
+ton_find_session_key(SSL *ssl) {
+    for (struct ton_session_key *k = ton_session_key_list; k; k = k->next) {
         if (k->ssl == ssl)
             return k;
     }
@@ -67,12 +67,12 @@ ttt_find_session_key(SSL *ssl) {
 
 /* Remove an entry from the global list of keys. */
 static void
-ttt_remove_session_key(SSL *ssl) {
-    struct ttt_session_key *prev = NULL;
-    for (struct ttt_session_key *cur = ttt_session_key_list; cur; cur = cur->next) {
+ton_remove_session_key(SSL *ssl) {
+    struct ton_session_key *prev = NULL;
+    for (struct ton_session_key *cur = ton_session_key_list; cur; cur = cur->next) {
         if (cur->ssl == ssl) {
             if (prev == NULL)
-                ttt_session_key_list = cur->next;
+                ton_session_key_list = cur->next;
             else
                 prev->next = cur->next;
             free(cur);
@@ -95,7 +95,7 @@ show_ssl_errors(FILE *out) {
 
 /* Test if the reason why the last socket call failed is because it would block. */
 static bool
-ttt_would_block(void) {
+ton_would_block(void) {
 #ifdef WINDOWS
     switch (WSAGetLastError()) {
         case WSAEINPROGRESS:
@@ -110,12 +110,12 @@ ttt_would_block(void) {
 }
 
 static void
-ttt_session_plain_destroy(struct ttt_session *s) {
+ton_session_plain_destroy(struct ton_session *s) {
     closesocket(s->sock);
 }
 
 static int
-ttt_session_plain_write(struct ttt_session *s, const void *buf, size_t len) {
+ton_session_plain_write(struct ton_session *s, const void *buf, size_t len) {
     ssize_t bytes_sent = 0;
     do {
         ssize_t rc = send(s->sock, (const char *) buf + bytes_sent, len - bytes_sent, 0);
@@ -128,45 +128,45 @@ ttt_session_plain_write(struct ttt_session *s, const void *buf, size_t len) {
 }
 
 static int
-ttt_session_plain_read(struct ttt_session *s, void *dest, size_t len) {
+ton_session_plain_read(struct ton_session *s, void *dest, size_t len) {
     return recv(s->sock, dest, len, 0);
 }
 
 static int
-ttt_session_plain_make_blocking(struct ttt_session *s) {
-    return ttt_make_socket_blocking(s->sock);
+ton_session_plain_make_blocking(struct ton_session *s) {
+    return ton_make_socket_blocking(s->sock);
 }
 
 static int
-ttt_session_plain_handshake(struct ttt_session *s) {
+ton_session_plain_handshake(struct ton_session *s) {
     /* No handshake in plaintext session. Not even sure this works any more. */
     return 0;
 }
 
 static int
-ttt_session_plain_init(struct ttt_session *s) {
-    s->destroy = ttt_session_plain_destroy;
-    s->write = ttt_session_plain_write;
-    s->read = ttt_session_plain_read;
-    s->make_blocking = ttt_session_plain_make_blocking;
-    s->handshake = ttt_session_plain_handshake;
+ton_session_plain_init(struct ton_session *s) {
+    s->destroy = ton_session_plain_destroy;
+    s->write = ton_session_plain_write;
+    s->read = ton_session_plain_read;
+    s->make_blocking = ton_session_plain_make_blocking;
+    s->handshake = ton_session_plain_handshake;
     return 0;
 }
 
 static void
-ttt_session_tls_destroy(struct ttt_session *s) {
+ton_session_tls_destroy(struct ton_session *s) {
     SSL_free(s->ssl);
     SSL_CTX_free(s->ssl_ctx);
     closesocket(s->sock);
 }
 
 static int
-ttt_session_tls_make_blocking(struct ttt_session *s) {
-    return ttt_make_socket_blocking(s->sock);
+ton_session_tls_make_blocking(struct ton_session *s) {
+    return ton_make_socket_blocking(s->sock);
 }
 
 static int
-ttt_session_tls_write(struct ttt_session *s, const void *buf, size_t len) {
+ton_session_tls_write(struct ton_session *s, const void *buf, size_t len) {
     int rc = SSL_write(s->ssl, buf, len);
     if (rc <= 0) {
         int ssl_err = SSL_get_error(s->ssl, rc);
@@ -187,7 +187,7 @@ ttt_session_tls_write(struct ttt_session *s, const void *buf, size_t len) {
 }
 
 static int
-ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
+ton_session_tls_read(struct ton_session *s, void *dest, size_t len) {
     int rc = SSL_read(s->ssl, dest, len);
     if (rc <= 0) {
         int ssl_err = SSL_get_error(s->ssl, rc);
@@ -211,7 +211,7 @@ ttt_session_tls_read(struct ttt_session *s, void *dest, size_t len) {
 }
 
 static void
-ttt_socket_flush(int sock) {
+ton_socket_flush(int sock) {
 #ifdef WINDOWS
     const DWORD one = 1;
     const DWORD zero = 0;
@@ -224,7 +224,7 @@ ttt_socket_flush(int sock) {
 }
 
 /* Make progress on a pre-TLS-handshake "hello" exchange, where the client
- * sends the server a TTT_HELLO_SIZE-byte hello message, and the server replies
+ * sends the server a TON_HELLO_SIZE-byte hello message, and the server replies
  * with its own hello message. This contains information like which version of
  * the wire protocol each side supports.
  *
@@ -238,18 +238,18 @@ ttt_socket_flush(int sock) {
  *     non-blocking and there's no data to receive or we can't currently send.
  */
 static int
-ttt_session_hello(struct ttt_session *s) {
+ton_session_hello(struct ton_session *s) {
     int rc;
 
-    while (s->client_hello_pos < TTT_HELLO_SIZE) {
+    while (s->client_hello_pos < TON_HELLO_SIZE) {
         /* Client sends their hello first */
         if (s->is_server)
             rc = recv(s->sock, (char *) s->client_hello + s->client_hello_pos,
-                    TTT_HELLO_SIZE - s->client_hello_pos, 0);
+                    TON_HELLO_SIZE - s->client_hello_pos, 0);
         else
             rc = send(s->sock, (char *) s->client_hello + s->client_hello_pos,
-                    TTT_HELLO_SIZE - s->client_hello_pos, 0);
-        if (rc < 0 && ttt_would_block()) {
+                    TON_HELLO_SIZE - s->client_hello_pos, 0);
+        if (rc < 0 && ton_would_block()) {
             /* Can't proceed without blocking */
             if (s->is_server)
                 s->want_read = true;
@@ -262,32 +262,32 @@ ttt_session_hello(struct ttt_session *s) {
              * multiple connections of which one completed first, and the
              * others then all legitimately closed. */
             /*if (rc == 0)
-                ttt_error(0, 0, "unexpected EOF during client hello");
+                ton_error(0, 0, "unexpected EOF during client hello");
             else
-                ttt_socket_error(0, "connection failed during client hello");*/
+                ton_socket_error(0, "connection failed during client hello");*/
             goto fail;
         }
         else {
             /* No error and we sent or received 1 or more bytes */
             s->client_hello_pos += rc;
-            if (s->client_hello_pos == TTT_HELLO_SIZE && !s->is_server) {
+            if (s->client_hello_pos == TON_HELLO_SIZE && !s->is_server) {
                 /* Finished sending hello message, and we aren't going to send
                  * anything more until we receive a reply to it. Flush the
                  * socket so that it doesn't get unnecessarily delayed. */
-                ttt_socket_flush(s->sock);
+                ton_socket_flush(s->sock);
             }
         }
     }
 
-    while (s->client_hello_pos == TTT_HELLO_SIZE && s->server_hello_pos < TTT_HELLO_SIZE) {
+    while (s->client_hello_pos == TON_HELLO_SIZE && s->server_hello_pos < TON_HELLO_SIZE) {
         /* Then the server replies with their hello */
         if (s->is_server)
             rc = send(s->sock, (char *) s->server_hello + s->server_hello_pos,
-                    TTT_HELLO_SIZE - s->server_hello_pos, 0);
+                    TON_HELLO_SIZE - s->server_hello_pos, 0);
         else
             rc = recv(s->sock, (char *) s->server_hello + s->server_hello_pos,
-                    TTT_HELLO_SIZE - s->server_hello_pos, 0);
-        if (rc < 0 && ttt_would_block()) {
+                    TON_HELLO_SIZE - s->server_hello_pos, 0);
+        if (rc < 0 && ton_would_block()) {
             /* We can't proceed without blocking */
             if (s->is_server)
                 s->want_write = true;
@@ -299,16 +299,16 @@ ttt_session_hello(struct ttt_session *s) {
             /* Don't report errors, because as above, they can legitimately
              * happen if another connection won the race. */
             /*if (rc == 0)
-                ttt_error(0, 0, "unexpected EOF during client hello");
+                ton_error(0, 0, "unexpected EOF during client hello");
             else
-                ttt_socket_error(0, "connection failed during server hello");*/
+                ton_socket_error(0, "connection failed during server hello");*/
             goto fail;
         }
         else {
             /* We sent/received some data */
             s->server_hello_pos += rc;
-            if (s->server_hello_pos == TTT_HELLO_SIZE && s->is_server) {
-                ttt_socket_flush(s->sock);
+            if (s->server_hello_pos == TON_HELLO_SIZE && s->is_server) {
+                ton_socket_flush(s->sock);
             }
         }
     }
@@ -316,27 +316,27 @@ ttt_session_hello(struct ttt_session *s) {
     /* If we get here, we have completed the hello exchange. Check that the
      * client and server protocol ranges are compatible and return some
      * good or bad news. */
-    assert(s->client_hello_pos == TTT_HELLO_SIZE);
-    assert(s->server_hello_pos == TTT_HELLO_SIZE);
+    assert(s->client_hello_pos == TON_HELLO_SIZE);
+    assert(s->server_hello_pos == TON_HELLO_SIZE);
 
     unsigned char *their_hello = (s->is_server ? s->client_hello : s->server_hello);
-    const uint16_t our_min = TTT_OUR_MIN_PROTOCOL_VERSION;
-    const uint16_t our_max = TTT_OUR_MAX_PROTOCOL_VERSION;
-    const uint32_t their_magic = ntohl(*(uint32_t *)(their_hello + TTT_HELLO_MAGIC_OFFSET));
-    const uint16_t their_min = ntohs(*(uint16_t *)(their_hello + TTT_HELLO_MIN_PROT_OFFSET));
-    const uint16_t their_max = ntohs(*(uint16_t *)(their_hello + TTT_HELLO_MAX_PROT_OFFSET));
-    const uint16_t their_flags = ntohl(*(uint32_t *)(their_hello + TTT_HELLO_FLAGS_OFFSET));
+    const uint16_t our_min = TON_OUR_MIN_PROTOCOL_VERSION;
+    const uint16_t our_max = TON_OUR_MAX_PROTOCOL_VERSION;
+    const uint32_t their_magic = ntohl(*(uint32_t *)(their_hello + TON_HELLO_MAGIC_OFFSET));
+    const uint16_t their_min = ntohs(*(uint16_t *)(their_hello + TON_HELLO_MIN_PROT_OFFSET));
+    const uint16_t their_max = ntohs(*(uint16_t *)(their_hello + TON_HELLO_MAX_PROT_OFFSET));
+    const uint16_t their_flags = ntohl(*(uint32_t *)(their_hello + TON_HELLO_FLAGS_OFFSET));
 
-    if (their_magic != TTT_HELLO_MAGIC) {
-        ttt_error(0, 0, "incorrect magic number in hello message: expected 0x%08x, received 0x%08x", TTT_HELLO_MAGIC, their_magic);
+    if (their_magic != TON_HELLO_MAGIC) {
+        ton_error(0, 0, "incorrect magic number in hello message: expected 0x%08x, received 0x%08x", TON_HELLO_MAGIC, their_magic);
         goto fail;
     }
     if (their_min > our_max) {
-        ttt_error(0, 0, "TTT protocol version mismatch: remote host requires version %hu but we only support up to version %hu", their_min, our_max);
+        ton_error(0, 0, "protocol version mismatch: remote host requires version %hu but we only support up to version %hu", their_min, our_max);
         goto fail;
     }
     if (our_min > their_max) {
-        ttt_error(0, 0, "TTT protocol version mismatch: we require version %hu but remote host only supports up to version %hu", our_min, their_max);
+        ton_error(0, 0, "protocol version mismatch: we require version %hu but remote host only supports up to version %hu", our_min, their_max);
         goto fail;
     }
     s->their_flags = their_flags;
@@ -354,13 +354,13 @@ fail:
 }
 
 static int
-ttt_session_tls_handshake(struct ttt_session *s) {
+ton_session_tls_handshake(struct ton_session *s) {
     int rc;
 
     /* If we haven't got the pre-handshake hello out of the way, make some
      * progress with that. */
-    if (s->server_hello_pos < TTT_HELLO_SIZE) {
-        rc = ttt_session_hello(s);
+    if (s->server_hello_pos < TON_HELLO_SIZE) {
+        rc = ton_session_hello(s);
         if (rc < 0) {
             /* *fail horns* */
             return rc;
@@ -372,7 +372,7 @@ ttt_session_tls_handshake(struct ttt_session *s) {
 
         /* Otherwise, hello exchange should have completed, and we can move
          * on to the TLS handshake. */
-        assert(s->server_hello_pos == TTT_HELLO_SIZE);
+        assert(s->server_hello_pos == TON_HELLO_SIZE);
         assert(s->protocol_version > 0);
     }
 
@@ -393,7 +393,7 @@ ttt_session_tls_handshake(struct ttt_session *s) {
     if (rc == 1) {
         /* Success */
         /*const SSL_CIPHER *cipher = SSL_get_current_cipher(s->ssl);
-        fprintf(stderr, "ttt_session_tls_handshake(): negotiated cipher %s\n", SSL_CIPHER_get_name(cipher));*/
+        fprintf(stderr, "ton_session_tls_handshake(): negotiated cipher %s\n", SSL_CIPHER_get_name(cipher));*/
         return 0;
     }
     else {
@@ -420,24 +420,24 @@ static unsigned int
 psk_client_cb(SSL *ssl, const char *hint,
         char *identity, unsigned int max_identity_len,
         unsigned char *psk, unsigned int max_psk_len) {
-    const struct ttt_session_key *key = ttt_find_session_key(ssl);
+    const struct ton_session_key *key = ton_find_session_key(ssl);
 
     if (key == NULL) {
-        ttt_error(0, 0, "psk_client_cb: internal error: no key set for SSL %p", ssl);
+        ton_error(0, 0, "psk_client_cb: internal error: no key set for SSL %p", ssl);
         return 0;
     }
 
     /* We don't use this */
-    strncpy(identity, "tttclient", max_identity_len);
+    strncpy(identity, "tonclient", max_identity_len);
     if (max_identity_len > 0)
         identity[max_identity_len - 1] = '\0';
 
-    if (TTT_KEY_SIZE > max_psk_len) {
-        ttt_error(0, 0, "psk_client_cb: psk buffer not big enough!");
+    if (TON_KEY_SIZE > max_psk_len) {
+        ton_error(0, 0, "psk_client_cb: psk buffer not big enough!");
         return 0;
     }
-    memcpy(psk, key->session_key, TTT_KEY_SIZE);
-    return TTT_KEY_SIZE;
+    memcpy(psk, key->session_key, TON_KEY_SIZE);
+    return TON_KEY_SIZE;
 }
 
 /*
@@ -445,36 +445,36 @@ static void
 ssl_trace(int write_p, int version, int content_type, const void *buf, size_t len, SSL *ssl, void *arg) {
     char context[100];
     snprintf(context, sizeof(context), "%s %d %d", write_p ? "sent" : "received", version, content_type);
-    ttt_dump_hex(buf, len, context);
+    ton_dump_hex(buf, len, context);
 }
 */
 
 static unsigned int
 psk_server_cb(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len) {
-    const struct ttt_session_key *key = ttt_find_session_key(ssl);
+    const struct ton_session_key *key = ton_find_session_key(ssl);
 
     if (key == NULL) {
-        ttt_error(0, 0, "psk_server_cb: internal error: no key set for SSL %p", ssl);
+        ton_error(0, 0, "psk_server_cb: internal error: no key set for SSL %p", ssl);
         return 0;
     }
 
-    if (TTT_KEY_SIZE > max_psk_len) {
-        ttt_error(0, 0, "psk_server_cb: psk buffer not big enough!");
+    if (TON_KEY_SIZE > max_psk_len) {
+        ton_error(0, 0, "psk_server_cb: psk buffer not big enough!");
         return 0;
     }
-    memcpy(psk, key->session_key, TTT_KEY_SIZE);
-    return TTT_KEY_SIZE;
+    memcpy(psk, key->session_key, TON_KEY_SIZE);
+    return TON_KEY_SIZE;
 }
 
 static int
-ttt_session_tls_init(struct ttt_session *s) {
+ton_session_tls_init(struct ton_session *s) {
     const SSL_METHOD *method;
 
-    s->destroy = ttt_session_tls_destroy;
-    s->write = ttt_session_tls_write;
-    s->read = ttt_session_tls_read;
-    s->make_blocking = ttt_session_tls_make_blocking;
-    s->handshake = ttt_session_tls_handshake;
+    s->destroy = ton_session_tls_destroy;
+    s->write = ton_session_tls_write;
+    s->read = ton_session_tls_read;
+    s->make_blocking = ton_session_tls_make_blocking;
+    s->handshake = ton_session_tls_handshake;
 
     /* Set up all the SSL rubbish, gleaned from bashing head against the
      * OpenSSL docs for ages. */
@@ -485,7 +485,7 @@ ttt_session_tls_init(struct ttt_session *s) {
 
     s->ssl_ctx = SSL_CTX_new(method);
     if (s->ssl_ctx == NULL) {
-        ttt_error(0, 0, "SSL_CTX_new failed");
+        ton_error(0, 0, "SSL_CTX_new failed");
         return -1;
     }
 
@@ -510,7 +510,7 @@ ttt_session_tls_init(struct ttt_session *s) {
 
     /* Add the mapping (s->ssl -> (session key)) to the global list, so
      * that the callbacks psk_server_cb and psk_client_cb can find it. */
-    ttt_set_session_key(s->ssl, s->session_key);
+    ton_set_session_key(s->ssl, s->session_key);
 
     /* Set the appropriate state, ready to start the handshake */
     if (s->is_server) {
@@ -523,19 +523,19 @@ ttt_session_tls_init(struct ttt_session *s) {
     return 0;
 }
 
-/* Initialise a TTT_HELLO_SIZE-byte hello message with the given information.
- * msg must point to a buffer of TTT_HELLO_SIZE bytes. */
+/* Initialise a TON_HELLO_SIZE-byte hello message with the given information.
+ * msg must point to a buffer of TON_HELLO_SIZE bytes. */
 static void
-ttt_session_init_hello_msg(unsigned char *msg, unsigned short min_prot_ver,
+ton_session_init_hello_msg(unsigned char *msg, unsigned short min_prot_ver,
         unsigned short max_prot_ver, unsigned long flags) {
-    *((uint32_t *) (msg + TTT_HELLO_MAGIC_OFFSET)) = htonl(TTT_HELLO_MAGIC);
-    *((uint16_t *) (msg + TTT_HELLO_MIN_PROT_OFFSET)) = htons(min_prot_ver);
-    *((uint16_t *) (msg + TTT_HELLO_MAX_PROT_OFFSET)) = htons(max_prot_ver);
-    *((uint32_t *) (msg + TTT_HELLO_FLAGS_OFFSET)) = htonl(flags);
+    *((uint32_t *) (msg + TON_HELLO_MAGIC_OFFSET)) = htonl(TON_HELLO_MAGIC);
+    *((uint16_t *) (msg + TON_HELLO_MIN_PROT_OFFSET)) = htons(min_prot_ver);
+    *((uint16_t *) (msg + TON_HELLO_MAX_PROT_OFFSET)) = htons(max_prot_ver);
+    *((uint32_t *) (msg + TON_HELLO_FLAGS_OFFSET)) = htonl(flags);
 }
 
 int
-ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
+ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
         socklen_t addr_len, bool use_tls, bool is_server,
         const unsigned char *key) {
     int rc;
@@ -559,53 +559,53 @@ ttt_session_init(struct ttt_session *s, int sock, const struct sockaddr *addr,
     s->our_flags = 0;
 
     /* Set our own hello message ready to send to the other host */
-    ttt_session_init_hello_msg(s->is_server ? s->server_hello : s->client_hello,
-            TTT_OUR_MIN_PROTOCOL_VERSION, TTT_OUR_MAX_PROTOCOL_VERSION,
+    ton_session_init_hello_msg(s->is_server ? s->server_hello : s->client_hello,
+            TON_OUR_MIN_PROTOCOL_VERSION, TON_OUR_MAX_PROTOCOL_VERSION,
             s->our_flags);
 
     if (key) {
-        memcpy(s->session_key, key, TTT_KEY_SIZE);
+        memcpy(s->session_key, key, TON_KEY_SIZE);
     }
 
     if (use_tls) {
-        rc = ttt_session_tls_init(s);
+        rc = ton_session_tls_init(s);
     }
     else {
-        rc = ttt_session_plain_init(s);
+        rc = ton_session_plain_init(s);
     }
     return rc;
 }
 
 int
-ttt_session_handshake(struct ttt_session *s) {
+ton_session_handshake(struct ton_session *s) {
     return s->handshake(s);
 }
 
 int
-ttt_session_get_peer_addr(struct ttt_session *s, char *addr_dest, int addr_dest_len, char *port_dest, int port_dest_len) {
+ton_session_get_peer_addr(struct ton_session *s, char *addr_dest, int addr_dest_len, char *port_dest, int port_dest_len) {
     int rc;
 
     rc = getnameinfo((struct sockaddr *) &s->addr, s->addr_len,
             addr_dest, addr_dest_len, port_dest, port_dest_len,
             NI_NUMERICHOST | NI_NUMERICSERV);
     if (rc != 0) {
-        ttt_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
+        ton_error(0, 0, "getnameinfo: %s", gai_strerror(rc));
     }
     return rc;
 }
 
 void
-ttt_session_destroy(struct ttt_session *s) {
+ton_session_destroy(struct ton_session *s) {
     if (s->ssl) {
-        ttt_remove_session_key(s->ssl);
+        ton_remove_session_key(s->ssl);
     }
     s->destroy(s);
 }
 
 void
-ttt_session_remove_from_list(struct ttt_session **list_start, struct ttt_session *target) {
-    struct ttt_session *prev = NULL;
-    for (struct ttt_session *cur = *list_start; cur; cur = cur->next) {
+ton_session_remove_from_list(struct ton_session **list_start, struct ton_session *target) {
+    struct ton_session *prev = NULL;
+    for (struct ton_session *cur = *list_start; cur; cur = cur->next) {
         if (cur == target) {
             if (prev == NULL) {
                 *list_start = cur->next;

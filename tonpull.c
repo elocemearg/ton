@@ -62,10 +62,10 @@ static const struct option longopts[] = {
 static void
 print_help(FILE *f) {
     fprintf(f,
-"ttt pull: receive a set of files or directories over TTT\n"
+"ton pull: receive a set of files or directories sent over the network\n"
 "\n"
 "Usage:\n"
-"    ttt pull [options] [destination directory]\n"
+"    ton pull [options] [destination directory]\n"
 "\n"
 "The default destination directory is the current working directory. If a\n"
 "destination directory is given, it will be created if it does not exist.\n"
@@ -100,7 +100,7 @@ print_help(FILE *f) {
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TTT_DEFAULT_DISCOVER_PORT, TTT_MULTICAST_GROUP_IPV4, TTT_MULTICAST_GROUP_IPV6);
+        TON_DEFAULT_DISCOVER_PORT, TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
 }
 
 static void
@@ -123,16 +123,16 @@ file_mode_to_string(int mode, char *dest) {
 }
 
 static int
-request_to_send(void *cookie, const struct ttt_file *files, long file_count,
+request_to_send(void *cookie, const struct ton_file *files, long file_count,
         long long total_size) {
-    struct ttt_session *sess = (struct ttt_session *) cookie;
+    struct ton_session *sess = (struct ton_session *) cookie;
     FILE *f = stderr;
     char size_str[12];
     char line[10];
     char addr[100];
     char port[20];
 
-    if (ttt_session_get_peer_addr(sess, addr, sizeof(addr), port, sizeof(port)) < 0) {
+    if (ton_session_get_peer_addr(sess, addr, sizeof(addr), port, sizeof(port)) < 0) {
         strcpy(addr, "(unknown)");
         strcpy(port, "(unknown)");
     }
@@ -140,11 +140,11 @@ request_to_send(void *cookie, const struct ttt_file *files, long file_count,
     if (files) {
         int num_files_printed = 0;
         fprintf(f, "%s is offering the following file(s):\n", addr);
-        for (const struct ttt_file *file = files; file; file = file->next) {
+        for (const struct ton_file *file = files; file; file = file->next) {
             char mode_str[12];
             file_mode_to_string(file->mode, mode_str);
-            ttt_size_to_str(file->size, size_str);
-            fprintf(f, "%10s %6s %s\n", mode_str, size_str, file->ttt_path);
+            ton_size_to_str(file->size, size_str);
+            fprintf(f, "%10s %6s %s\n", mode_str, size_str, file->ton_path);
             if (++num_files_printed >= 10) {
                 fprintf(f, "...\n[%ld other files, not shown]\n", file_count - num_files_printed);
                 break;
@@ -156,7 +156,7 @@ request_to_send(void *cookie, const struct ttt_file *files, long file_count,
         fprintf(f, "%s wishes to send some files.\n", addr);
     }
     if (file_count >= 0 && total_size >= 0) {
-        ttt_size_to_str(total_size, size_str);
+        ton_size_to_str(total_size, size_str);
         fprintf(f, "Total %ld files, %s.\n", file_count, size_str);
     }
     fprintf(f, "\n");
@@ -179,7 +179,7 @@ sent_announcement(void *cookie, int announcement_round_seq, int iface_addr_seq,
         struct sockaddr *to_addr, socklen_t to_addr_len) {
     if (announcement_round_seq > 0 && announcement_round_seq % 10 == 0 && iface_addr_seq == 0) {
         fprintf(stderr, "Announced to the network %d times but no valid connection received yet.\n"
-                "   Is \"ttt push\" running on the other host?\n"
+                "   Is \"ton push\" running on the other host?\n"
                 "   Is the passphrase correct?\n",
                 announcement_round_seq);
     }
@@ -198,7 +198,7 @@ main_pull(int argc, char **argv) {
     int multicast_ttl = 0; // use default (1 for IPv4, route default for IPv6)
     char *passphrase = NULL;
     char *multicast_address_ipv4 = NULL, *multicast_address_ipv6 = NULL;
-    struct ttt_session sess;
+    struct ton_session sess;
     bool sess_valid = 0;
     int exit_status = 0;
     char *output_dir = NULL;
@@ -210,7 +210,7 @@ main_pull(int argc, char **argv) {
     bool include_global = 0;
     bool hide_passphrase = 0;
     char *output_filename = NULL;
-    struct ttt_discover_options opts;
+    struct ton_discover_options opts;
 
     while ((c = getopt_long(argc, argv, "ho:qv46", longopts, NULL)) != -1) {
         switch (c) {
@@ -224,12 +224,12 @@ main_pull(int argc, char **argv) {
             case PULL_ANNOUNCEMENT_INTERVAL:
                 announcement_interval_sec = parse_double_or_exit(optarg, "--announcement-interval");
                 if (announcement_interval_sec < 0.1) {
-                    ttt_error(1, 0, "--announcement-interval: interval must be at least 0.1 seconds");
+                    ton_error(1, 0, "--announcement-interval: interval must be at least 0.1 seconds");
                 }
                 /* We will need to convert this to milliseconds and pass it
                  * as an int... */
                 if (announcement_interval_sec > INT_MAX / 1000) {
-                    ttt_error(1, 0, "--announcement-interval: value is too large (max is %d)", INT_MAX / 1000);
+                    ton_error(1, 0, "--announcement-interval: value is too large (max is %d)", INT_MAX / 1000);
                 }
                 break;
 
@@ -240,14 +240,14 @@ main_pull(int argc, char **argv) {
             case PULL_DISCOVER_PORT:
                 discover_port = atoi(optarg);
                 if (discover_port == 0 || discover_port > 65535) {
-                    ttt_error(1, 0, "--discover-port: port number must be between 1 and 65535");
+                    ton_error(1, 0, "--discover-port: port number must be between 1 and 65535");
                 }
                 break;
 
             case PULL_LISTEN_PORT:
                 listen_port = atoi(optarg);
                 if (listen_port < 0 || listen_port > 65535) {
-                    ttt_error(1, 0, "--listen-port: port number must be between 1 and 65535, or 0 for any port");
+                    ton_error(1, 0, "--listen-port: port number must be between 1 and 65535, or 0 for any port");
                 }
                 break;
 
@@ -264,7 +264,7 @@ main_pull(int argc, char **argv) {
                 if (multicast_ttl < 0)
                     multicast_ttl = 0;
                 else if (multicast_ttl > 5)
-                    ttt_error(1, 0, "--multicast-ttl: I'm not going higher than 5");
+                    ton_error(1, 0, "--multicast-ttl: I'm not going higher than 5");
                 break;
 
             case PULL_CONFIRM_FILE_SET:
@@ -273,20 +273,20 @@ main_pull(int argc, char **argv) {
 
             case '4':
             case PULL_IPV4:
-                address_families |= TTT_IPV4;
+                address_families |= TON_IPV4;
                 break;
 
             case '6':
             case PULL_IPV6:
-                address_families |= TTT_IPV6;
+                address_families |= TON_IPV6;
                 break;
 
             case PULL_BROADCAST:
-                announce_types |= TTT_ANNOUNCE_BROADCAST;
+                announce_types |= TON_ANNOUNCE_BROADCAST;
                 break;
 
             case PULL_MULTICAST:
-                announce_types |= TTT_ANNOUNCE_MULTICAST;
+                announce_types |= TON_ANNOUNCE_MULTICAST;
                 break;
 
             case PULL_INCLUDE_GLOBAL:
@@ -330,11 +330,11 @@ main_pull(int argc, char **argv) {
     }
 
     if (address_families == 0) {
-        address_families = TTT_IP_BOTH;
+        address_families = TON_IP_BOTH;
     }
 
     if (announce_types == 0) {
-        announce_types = TTT_ANNOUNCE_BOTH;
+        announce_types = TON_ANNOUNCE_BOTH;
     }
 
     /* If a positional argument is given, it's the destination directory. */
@@ -342,7 +342,7 @@ main_pull(int argc, char **argv) {
         output_dir = argv[optind++];
         if (optind < argc) {
             /* But we can't have more than one. */
-            ttt_error(1, 0, "%s: only one destination directory may be given", argv[optind]);
+            ton_error(1, 0, "%s: only one destination directory may be given", argv[optind]);
         }
         if (!strcmp(output_dir, "-")) {
             /* Special case: output directory "-" means output file is stdout */
@@ -353,7 +353,7 @@ main_pull(int argc, char **argv) {
 
     if (output_filename != NULL && output_dir != NULL) {
         /* We can't have an output file and an output directory. */
-        ttt_error(1, 0, "--output-file may not be supplied if a destination directory is also supplied");
+        ton_error(1, 0, "--output-file may not be supplied if a destination directory is also supplied");
     }
 
     if (output_dir == NULL) {
@@ -365,52 +365,52 @@ main_pull(int argc, char **argv) {
     if (passphrase == NULL) {
         /* No passphrase supplied, so prompt for one. */
         fprintf(stderr, "Enter the passphrase generated or specified on the pushing side.\n");
-        passphrase = ttt_prompt_passphrase("Passphrase? ", hide_passphrase);
+        passphrase = ton_prompt_passphrase("Passphrase? ", hide_passphrase);
         if (passphrase == NULL) {
             exit(1);
         }
     }
 
-    ttt_discover_options_init(&opts, passphrase, strlen(passphrase));
+    ton_discover_options_init(&opts, passphrase, strlen(passphrase));
 
     /* Set up opts with our options */
     if (multicast_address_ipv4)
-        ttt_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
+        ton_discover_set_multicast_ipv4_address(&opts, multicast_address_ipv4);
     if (multicast_address_ipv6)
-        ttt_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv4);
-    ttt_discover_set_address_families(&opts, address_families);
-    ttt_discover_set_announcement_types(&opts, announce_types);
+        ton_discover_set_multicast_ipv6_address(&opts, multicast_address_ipv4);
+    ton_discover_set_address_families(&opts, address_families);
+    ton_discover_set_announcement_types(&opts, announce_types);
     if (discover_port > 0)
-        ttt_discover_set_discover_port(&opts, discover_port);
+        ton_discover_set_discover_port(&opts, discover_port);
     if (listen_port >= 0)
-        ttt_discover_set_listen_port(&opts, listen_port);
-    ttt_discover_set_announcements(&opts, max_announcements, (int) (1000 * announcement_interval_sec));
-    ttt_discover_set_multicast_ttl(&opts, multicast_ttl);
-    ttt_discover_set_verbose(&opts, verbose);
-    ttt_discover_set_include_global_addresses(&opts, include_global);
-    ttt_discover_set_listen_port(&opts, listen_port);
+        ton_discover_set_listen_port(&opts, listen_port);
+    ton_discover_set_announcements(&opts, max_announcements, (int) (1000 * announcement_interval_sec));
+    ton_discover_set_multicast_ttl(&opts, multicast_ttl);
+    ton_discover_set_verbose(&opts, verbose);
+    ton_discover_set_include_global_addresses(&opts, include_global);
+    ton_discover_set_listen_port(&opts, listen_port);
 
     if (!quiet) {
-        ttt_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
+        ton_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
     }
 
     /* Discover the other endpoint with our passphrase, and let them
      * connect to us. */
-    if (ttt_discover_and_accept(&opts, &sess) == 0) {
+    if (ton_discover_and_accept(&opts, &sess) == 0) {
         sess_valid = true;
     }
     else {
-        ttt_error(0, 0, "failed to establish incoming connection");
+        ton_error(0, 0, "failed to establish incoming connection");
         exit_status = 1;
     }
 
     if (sess_valid) {
-        struct ttt_file_transfer ctx;
+        struct ton_file_transfer ctx;
         FILE *output_file = NULL;
 
         if (!quiet) {
             /* Tell the user we successfully found the other endpoint */
-            if (ttt_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
+            if (ton_session_get_peer_addr(&sess, peer_addr, sizeof(peer_addr), peer_port, sizeof(peer_port)) < 0) {
                 fprintf(stderr, "Established connection.\n");
             }
             else {
@@ -419,10 +419,10 @@ main_pull(int argc, char **argv) {
         }
 
         /* Set up the file transfer session as receiver... */
-        ttt_file_transfer_init_receiver(&ctx, output_dir);
+        ton_file_transfer_init_receiver(&ctx, output_dir);
         if (confirm_file_set) {
-            ttt_file_transfer_set_callback_cookie(&ctx, &sess);
-            ttt_file_transfer_set_request_to_send_callback(&ctx, request_to_send);
+            ton_file_transfer_set_callback_cookie(&ctx, &sess);
+            ton_file_transfer_set_request_to_send_callback(&ctx, request_to_send);
         }
 
         /* If we're writing all received files to a single output file, open
@@ -436,27 +436,27 @@ main_pull(int argc, char **argv) {
                 /* Write everything to a named file */
                 output_file = fopen(output_filename, "wb");
                 if (output_file == NULL) {
-                    ttt_error(1, errno, "%s", output_filename);
+                    ton_error(1, errno, "%s", output_filename);
                 }
             }
         }
         if (output_file != NULL) {
-            ttt_file_transfer_set_output_file(&ctx, output_file);
+            ton_file_transfer_set_output_file(&ctx, output_file);
         }
 
         if (quiet) {
-            ttt_file_transfer_set_progress_callback(&ctx, NULL);
+            ton_file_transfer_set_progress_callback(&ctx, NULL);
         }
 
         /* Run the file transfer session and receive files. */
-        exit_status = (ttt_file_transfer_session(&ctx, &sess) != 0);
-        ttt_session_destroy(&sess);
-        ttt_file_transfer_destroy(&ctx);
+        exit_status = (ton_file_transfer_session(&ctx, &sess) != 0);
+        ton_session_destroy(&sess);
+        ton_file_transfer_destroy(&ctx);
 
         if (output_file != NULL) {
             /* Close our output file, if we have one. */
             if (fclose(output_file) == EOF) {
-                ttt_error(0, errno, "%s", output_filename);
+                ton_error(0, errno, "%s", output_filename);
                 exit_status = 1;
             }
         }
@@ -464,7 +464,7 @@ main_pull(int argc, char **argv) {
 
     free(passphrase);
 
-    ttt_discover_options_destroy(&opts);
+    ton_discover_options_destroy(&opts);
 
     return exit_status;
 }

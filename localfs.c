@@ -13,12 +13,12 @@
 #include "utils.h"
 
 size_t
-ttt_lf_char_size(void) {
-    return sizeof(TTT_LF_CHAR);
+ton_lf_char_size(void) {
+    return sizeof(TON_LF_CHAR);
 }
 
 size_t
-ttt_lf_len(const TTT_LF_CHAR *str) {
+ton_lf_len(const TON_LF_CHAR *str) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return wcslen(str);
 #else
@@ -27,7 +27,7 @@ ttt_lf_len(const TTT_LF_CHAR *str) {
 }
 
 void
-ttt_lf_copy(TTT_LF_CHAR *dest, const TTT_LF_CHAR *src) {
+ton_lf_copy(TON_LF_CHAR *dest, const TON_LF_CHAR *src) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     wcscpy(dest, src);
 #else
@@ -36,7 +36,7 @@ ttt_lf_copy(TTT_LF_CHAR *dest, const TTT_LF_CHAR *src) {
 }
 
 int
-ttt_lf_casecmp(const TTT_LF_CHAR *str1, const TTT_LF_CHAR *str2) {
+ton_lf_casecmp(const TON_LF_CHAR *str1, const TON_LF_CHAR *str2) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return _wcsicmp(str1, str2);
 #else
@@ -45,7 +45,7 @@ ttt_lf_casecmp(const TTT_LF_CHAR *str1, const TTT_LF_CHAR *str2) {
 }
 
 int
-ttt_lf_cmp(const TTT_LF_CHAR *str1, const TTT_LF_CHAR *str2) {
+ton_lf_cmp(const TON_LF_CHAR *str1, const TON_LF_CHAR *str2) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return wcscmp(str1, str2);
 #else
@@ -53,8 +53,8 @@ ttt_lf_cmp(const TTT_LF_CHAR *str1, const TTT_LF_CHAR *str2) {
 #endif
 }
 
-TTT_LF_CHAR *
-ttt_lf_dup(const TTT_LF_CHAR *str) {
+TON_LF_CHAR *
+ton_lf_dup(const TON_LF_CHAR *str) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return wcsdup(str);
 #else
@@ -62,8 +62,8 @@ ttt_lf_dup(const TTT_LF_CHAR *str) {
 #endif
 }
 
-TTT_LF_CHAR *
-ttt_lf_strrchr(const TTT_LF_CHAR *str, TTT_LF_CHAR c) {
+TON_LF_CHAR *
+ton_lf_strrchr(const TON_LF_CHAR *str, TON_LF_CHAR c) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return wcsrchr(str, c);
 #else
@@ -71,20 +71,20 @@ ttt_lf_strrchr(const TTT_LF_CHAR *str, TTT_LF_CHAR c) {
 #endif
 }
 
-TTT_DIR_HANDLE
-ttt_opendir(const TTT_LF_CHAR *path) {
+TON_DIR_HANDLE
+ton_opendir(const TON_LF_CHAR *path) {
 #ifdef WINDOWS
-    struct ttt_dir_handle *handle;
+    struct ton_dir_handle *handle;
     wchar_t *path_with_wildcard;
     size_t pos;
 
-    handle = malloc(sizeof(struct ttt_dir_handle));
+    handle = malloc(sizeof(struct ton_dir_handle));
     if (handle == NULL)
         return NULL;
 
     handle->finished = false;
 
-    path_with_wildcard = malloc((wcslen(path) + 3) * sizeof(TTT_LF_CHAR));
+    path_with_wildcard = malloc((wcslen(path) + 3) * sizeof(TON_LF_CHAR));
     if (path_with_wildcard == NULL) {
         free(handle);
         return NULL;
@@ -103,9 +103,9 @@ ttt_opendir(const TTT_LF_CHAR *path) {
     path_with_wildcard[pos++] = 0;
 
     /* Read the first entry, which also opens the handle. However, the API of
-     * ttt_opendir() and ttt_readdir() is like opendir() and readdir() in that
-     * it doesn't return the first entry from ttt_opendir(). So we'll store
-     * this in "handle" and return it when ttt_readdir() is called. */
+     * ton_opendir() and ton_readdir() is like opendir() and readdir() in that
+     * it doesn't return the first entry from ton_opendir(). So we'll store
+     * this in "handle" and return it when ton_readdir() is called. */
     handle->hFind = FindFirstFileW(path_with_wildcard, &handle->find_data);
     if (handle->hFind == INVALID_HANDLE_VALUE) {
         handle->finished = true;
@@ -119,8 +119,8 @@ ttt_opendir(const TTT_LF_CHAR *path) {
 #endif
 }
 
-TTT_DIR_ENTRY
-ttt_readdir(TTT_DIR_HANDLE handle) {
+TON_DIR_ENTRY
+ton_readdir(TON_DIR_HANDLE handle) {
 #ifdef WINDOWS
     if (handle->finished) {
         return NULL;
@@ -130,13 +130,13 @@ ttt_readdir(TTT_DIR_HANDLE handle) {
     wcsncpy(handle->entry.d_name, handle->find_data.cFileName, MAX_PATH);
 
     /* Now fetch the next entry from FindNextFile() into handle->find_data.
-     * If that returns an entry then we'll return it on the next ttt_readdir()
-     * call. If there are no more entries then the next ttt_readdir() call will
+     * If that returns an entry then we'll return it on the next ton_readdir()
+     * call. If there are no more entries then the next ton_readdir() call will
      * return NULL. */
     if (FindNextFileW(handle->hFind, &handle->find_data) == 0) {
         DWORD err = GetLastError();
         if (err != ERROR_NO_MORE_FILES) {
-            ttt_error(0, 0, TTT_LF_PRINTF ": failed to read directory", handle->path);
+            ton_error(0, 0, TON_LF_PRINTF ": failed to read directory", handle->path);
             errno = EPERM;
             return NULL;
         }
@@ -153,7 +153,7 @@ ttt_readdir(TTT_DIR_HANDLE handle) {
 }
 
 int
-ttt_closedir(TTT_DIR_HANDLE handle) {
+ton_closedir(TON_DIR_HANDLE handle) {
 #ifdef WINDOWS
     if (handle->hFind != INVALID_HANDLE_VALUE) {
         FindClose(handle->hFind);
@@ -167,7 +167,7 @@ ttt_closedir(TTT_DIR_HANDLE handle) {
 }
 
 FILE *
-ttt_fopen(const TTT_LF_CHAR *path, TTT_LF_CHAR *mode) {
+ton_fopen(const TON_LF_CHAR *path, TON_LF_CHAR *mode) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return _wfopen(path, mode);
 #else
@@ -176,7 +176,7 @@ ttt_fopen(const TTT_LF_CHAR *path, TTT_LF_CHAR *mode) {
 }
 
 int
-ttt_stat(const TTT_LF_CHAR *path, TTT_STAT *st) {
+ton_stat(const TON_LF_CHAR *path, TON_STAT *st) {
 #ifdef WINDOWS
     return _wstat64(path, st);
 #else
@@ -185,7 +185,7 @@ ttt_stat(const TTT_LF_CHAR *path, TTT_STAT *st) {
 }
 
 int
-ttt_unlink(const TTT_LF_CHAR *path) {
+ton_unlink(const TON_LF_CHAR *path) {
 #ifdef WINDOWS
     return _wunlink(path);
 #else
@@ -194,7 +194,7 @@ ttt_unlink(const TTT_LF_CHAR *path) {
 }
 
 int
-ttt_mkdir(const TTT_LF_CHAR *pathname, int mode) {
+ton_mkdir(const TON_LF_CHAR *pathname, int mode) {
 #ifdef WINDOWS
     return _wmkdir(pathname);
 #else
@@ -203,18 +203,18 @@ ttt_mkdir(const TTT_LF_CHAR *pathname, int mode) {
 }
 
 int
-ttt_mkdir_parents(const TTT_LF_CHAR *pathname_orig, int mode, bool parents_only) {
+ton_mkdir_parents(const TON_LF_CHAR *pathname_orig, int mode, bool parents_only) {
     size_t pathname_len;
-    TTT_LF_CHAR *pathname = ttt_lf_dup(pathname_orig);
-    TTT_LF_CHAR *last_dir_sep = NULL;
+    TON_LF_CHAR *pathname = ton_lf_dup(pathname_orig);
+    TON_LF_CHAR *last_dir_sep = NULL;
     int return_value = 0;
-    TTT_STAT st;
+    TON_STAT st;
 
     if (pathname == NULL)
         return -1;
 
     /* Remove any trailing directory separators from pathname */
-    pathname_len = ttt_lf_len(pathname);
+    pathname_len = ton_lf_len(pathname);
     while (pathname_len > 0 && pathname[pathname_len - 1] == DIR_SEP)
         pathname[--pathname_len] = '\0';
 
@@ -222,12 +222,12 @@ ttt_mkdir_parents(const TTT_LF_CHAR *pathname_orig, int mode, bool parents_only)
      * already exists as a directory. If so, there's nothing to do and we
      * don't need to check each component in turn. */
     if (parents_only) {
-        last_dir_sep = ttt_lf_strrchr(pathname, DIR_SEP);
+        last_dir_sep = ton_lf_strrchr(pathname, DIR_SEP);
         if (last_dir_sep) {
             *last_dir_sep = '\0';
         }
     }
-    if (ttt_stat(pathname, &st) == 0 && S_ISDIR(st.st_mode)) {
+    if (ton_stat(pathname, &st) == 0 && S_ISDIR(st.st_mode)) {
         /* deepest level directory we would create already exists */
         free(pathname);
         return 0;
@@ -246,9 +246,9 @@ ttt_mkdir_parents(const TTT_LF_CHAR *pathname_orig, int mode, bool parents_only)
         if (pathname[pos] == DIR_SEP || (!parents_only && pathname[pos] == '\0')) {
             /* Does pathname[0 to pos] exist as a directory? */
             pathname[pos] = '\0';
-            if (ttt_stat(pathname, &st) < 0 && errno == ENOENT) {
+            if (ton_stat(pathname, &st) < 0 && errno == ENOENT) {
                 /* Doesn't exist - create it. */
-                if (ttt_mkdir(pathname, mode) < 0) {
+                if (ton_mkdir(pathname, mode) < 0) {
                     goto fail;
                 }
             }
@@ -275,7 +275,7 @@ fail:
 
 #ifdef WINDOWS
 int
-ttt_chmod(const TTT_LF_CHAR *path, int unix_mode) {
+ton_chmod(const TON_LF_CHAR *path, int unix_mode) {
     /* Translate the Unix-style chmod mode bits into what's required by the
      * Windows _chmod call, which only supports one read and write bit.
      * Take those from the owner-readable and owner-writable bits of
@@ -291,13 +291,13 @@ ttt_chmod(const TTT_LF_CHAR *path, int unix_mode) {
 }
 #else
 int
-ttt_chmod(const TTT_LF_CHAR *path, mode_t mode) {
+ton_chmod(const TON_LF_CHAR *path, mode_t mode) {
     return chmod(path, mode);
 }
 #endif
 
 int
-ttt_utime(const TTT_LF_CHAR *path, TTT_UTIMBUF *timbuf) {
+ton_utime(const TON_LF_CHAR *path, TON_UTIMBUF *timbuf) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return _wutime(path, timbuf);
 #else
@@ -306,7 +306,7 @@ ttt_utime(const TTT_LF_CHAR *path, TTT_UTIMBUF *timbuf) {
 }
 
 int
-ttt_access(const TTT_LF_CHAR *path, int mode) {
+ton_access(const TON_LF_CHAR *path, int mode) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return _waccess(path, mode);
 #else
@@ -314,8 +314,8 @@ ttt_access(const TTT_LF_CHAR *path, int mode) {
 #endif
 }
 
-TTT_LF_CHAR *
-ttt_realpath(const TTT_LF_CHAR *path) {
+TON_LF_CHAR *
+ton_realpath(const TON_LF_CHAR *path) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     return _wfullpath(NULL, path, 0);
 #else
@@ -444,14 +444,14 @@ wchar_to_utf8(char **outp, const wchar_t **in, int32_t repl) {
 #endif
 
 char *
-ttt_lf_to_utf8(const TTT_LF_CHAR *filename) {
+ton_lf_to_utf8(const TON_LF_CHAR *filename) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     char *out;
     const wchar_t *in = filename;
     char *outp;
 
     /* Maximum space needed is four bytes per character, plus '\0' */
-    out = malloc(ttt_lf_len(filename) * 4 + 1);
+    out = malloc(ton_lf_len(filename) * 4 + 1);
     if (out == NULL)
         return NULL;
     outp = out;
@@ -480,8 +480,8 @@ ttt_lf_to_utf8(const TTT_LF_CHAR *filename) {
 #endif
 }
 
-TTT_LF_CHAR *
-ttt_lf_from_utf8(const char *filename) {
+TON_LF_CHAR *
+ton_lf_from_utf8(const char *filename) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     wchar_t *out;
     const char *inp;
@@ -521,8 +521,8 @@ ttt_lf_from_utf8(const char *filename) {
 #endif
 }
 
-TTT_LF_CHAR *
-ttt_lf_from_locale(const char *filename) {
+TON_LF_CHAR *
+ton_lf_from_locale(const char *filename) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     size_t num_chars;
     wchar_t *out;
@@ -547,12 +547,12 @@ ttt_lf_from_locale(const char *filename) {
 
 /*****************************************************************************/
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <CUnit/CUnit.h>
 
 static void
-test_ttt_lf_from_utf8(void) {
+test_ton_lf_from_utf8(void) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     struct {
         char *utf8;
@@ -569,9 +569,9 @@ test_ttt_lf_from_utf8(void) {
         wchar_t *expected = tests[i].expected;
         wchar_t *observed;
 
-        observed = ttt_lf_from_utf8(utf8);
+        observed = ton_lf_from_utf8(utf8);
         if (wcscmp(observed, expected)) {
-            fprintf(stderr, "test_ttt_lf_from_utf8(): utf8 \"%s\", expected \"%ls\", observed \"%ls\"\n",
+            fprintf(stderr, "test_ton_lf_from_utf8(): utf8 \"%s\", expected \"%ls\", observed \"%ls\"\n",
                     utf8, expected, observed);
             CU_FAIL("output not as expected");
         }
@@ -579,12 +579,12 @@ test_ttt_lf_from_utf8(void) {
     }
 
     /* If LOCAL_FILENAME_IS_WCHAR is not defined, then
-     * ttt_lf_from_utf8() is just strdup(). */
+     * ton_lf_from_utf8() is just strdup(). */
 #endif
 }
 
 static void
-test_ttt_lf_to_utf8(void) {
+test_ton_lf_to_utf8(void) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     struct {
         wchar_t *local;
@@ -597,7 +597,7 @@ test_ttt_lf_to_utf8(void) {
     };
 #else
     /* On Linux a local filename is just a bag of bytes, so
-     * ttt_lf_to_utf8() should leave it unchanged unless it happens
+     * ton_lf_to_utf8() should leave it unchanged unless it happens
      * to be invalid UTF-8. */
     struct {
         char *local;
@@ -612,16 +612,16 @@ test_ttt_lf_to_utf8(void) {
 #endif
 
     for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
-        TTT_LF_CHAR *local = tests[i].local;
+        TON_LF_CHAR *local = tests[i].local;
         char *expected = tests[i].expected;
         char *observed;
 
-        observed = ttt_lf_to_utf8(local);
+        observed = ton_lf_to_utf8(local);
         if (strcmp(observed, expected)) {
-            fprintf(stderr, "test_ttt_lf_from_utf8(): local \"" TTT_LF_PRINTF "\", expected \"%s\", observed \"%s\"\n",
+            fprintf(stderr, "test_ton_lf_from_utf8(): local \"" TON_LF_PRINTF "\", expected \"%s\", observed \"%s\"\n",
                     local, expected, observed);
-            ttt_dump_hex(observed, strlen(observed), "observed");
-            ttt_dump_hex(expected, strlen(expected), "expected");
+            ton_dump_hex(observed, strlen(observed), "observed");
+            ton_dump_hex(expected, strlen(expected), "expected");
         }
         CU_ASSERT_STRING_EQUAL(observed, expected);
         free(observed);
@@ -629,10 +629,10 @@ test_ttt_lf_to_utf8(void) {
 }
 
 CU_ErrorCode
-ttt_localfs_register_tests(void) {
+ton_localfs_register_tests(void) {
     CU_TestInfo tests[] = {
-        { "ttt_lf_from_utf8", test_ttt_lf_from_utf8 },
-        { "ttt_lf_to_utf8", test_ttt_lf_to_utf8 },
+        { "ton_lf_from_utf8", test_ton_lf_from_utf8 },
+        { "ton_lf_to_utf8", test_ton_lf_to_utf8 },
         CU_TEST_INFO_NULL
     };
 

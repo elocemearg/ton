@@ -1,5 +1,5 @@
-#ifndef _TTTNETIF_H
-#define _TTTNETIF_H
+#ifndef _TONNETIF_H
+#define _TONNETIF_H
 
 #include <stdbool.h>
 
@@ -15,7 +15,7 @@
 
 /* Windows/Linux-independent struct describing a network interface on this
  * computer. */
-struct ttt_netif {
+struct ton_netif {
     /* Address family: AF_INET or AF_INET6 */
 #ifdef WINDOWS
     u_short family;
@@ -50,51 +50,51 @@ struct ttt_netif {
     /* Length of the sockaddr in bc_addr. */
     socklen_t bc_addr_len;
 
-    /* netif.c initialises this to -1 upon creation of the ttt_netif object.
+    /* netif.c initialises this to -1 upon creation of the ton_netif object.
      * It's only for the caller to store a socket alongside this interface.
-     * In particular, ttt_netif_list_free() will close it if asked to. */
+     * In particular, ton_netif_list_free() will close it if asked to. */
     int sock;
 
     /* Next interface in the list. */
-    struct ttt_netif *next;
+    struct ton_netif *next;
 };
 
 /* Get a list of all suitable network interfaces which support multicast.
- * We return a pointer to a linked list of struct ttt_netif.
+ * We return a pointer to a linked list of struct ton_netif.
  *
- * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
+ * address_families_flags: TON_IPV4_ONLY, TON_IPV6_ONLY, or TON_IP_BOTH.
  * Tells the function we only want interfaces for these address families.
  *
  * It is the caller's responsibility to pass the return value to
- * ttt_free_addrs() when it's no longer needed. */
-struct ttt_netif *
-ttt_get_multicast_ifs(int address_families_flags, bool include_global);
+ * ton_free_addrs() when it's no longer needed. */
+struct ton_netif *
+ton_get_multicast_ifs(int address_families_flags, bool include_global);
 
 /* Get a list of all suitable network interfaces which have a broadcast
- * address we can use. We return a pointer to a linked list of struct ttt_netif.
+ * address we can use. We return a pointer to a linked list of struct ton_netif.
  *
- * address_families_flags: TTT_IPV4_ONLY, TTT_IPV6_ONLY, or TTT_IP_BOTH.
+ * address_families_flags: TON_IPV4_ONLY, TON_IPV6_ONLY, or TON_IP_BOTH.
  * Tells the function we only want interfaces for these address families.
  *
  * It is the caller's responsibility to pass the return value to
- * ttt_free_addrs() when it's no longer needed. */
-struct ttt_netif *
-ttt_get_broadcast_ifs(int address_families_flags, bool include_global);
+ * ton_free_addrs() when it's no longer needed. */
+struct ton_netif *
+ton_get_broadcast_ifs(int address_families_flags, bool include_global);
 
-/* Free a list of interfaces previously returned by ttt_get_multicast_ifs()
- * or ttt_get_broadcast_ifs(). num_addrs must be the *num_ifaces value
+/* Free a list of interfaces previously returned by ton_get_multicast_ifs()
+ * or ton_get_broadcast_ifs(). num_addrs must be the *num_ifaces value
  * yielded by that function.
  *
- * If close_sockets is nonzero, then ttt_netif_list_free() calls closesocket()
- * on each ttt_netif's sock value if that is non-negative.
+ * If close_sockets is nonzero, then ton_netif_list_free() calls closesocket()
+ * on each ton_netif's sock value if that is non-negative.
  */
 void
-ttt_netif_list_free(struct ttt_netif *list, bool close_sockets);
+ton_netif_list_free(struct ton_netif *list, bool close_sockets);
 
 /* Find all the multicast-enabled interfaces we can and enable them to receive
  * multicast datagrams on this socket to the given address, which must be in
  * the multicast range. If multicast_addr_str is NULL, use the default
- * TTT_MULTICAST_GROUP_IPV4 or TTT_MULTICAST_GROUP_IPV6 as appropriate. If
+ * TON_MULTICAST_GROUP_IPV4 or TON_MULTICAST_GROUP_IPV6 as appropriate. If
  * include_global is nonzero, do this on all interfaces, even those which only
  * have globally-routable IP addresses.
  *
@@ -106,7 +106,7 @@ multicast_interfaces_subscribe(int sock, const char *multicast_addr_str, bool in
 /* Undo multicast_interfaces_subscribe(): make it so that the socket no longer
  * receives datagrams to the given multicast address on all multicast-enabled
  * interfaces. If multicast_addr_str is NULL, use the default
- * TTT_MULTICAST_GROUP_IPV4 or TTT_MULTICAST_GROUP_IPV6.
+ * TON_MULTICAST_GROUP_IPV4 or TON_MULTICAST_GROUP_IPV6.
  *
  * Return the number of interfaces on which we successfully unsubscribed from
  * datagrams to this address.
@@ -115,13 +115,13 @@ int
 multicast_interfaces_unsubscribe(int sock, const char *multicast_addr_str);
 
 
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
 
 #include <CUnit/CUnit.h>
 
-/* Used by ttt test. */
+/* Used by ton test. */
 CU_ErrorCode
-ttt_netif_register_tests(void);
+ton_netif_register_tests(void);
 
 #endif
 

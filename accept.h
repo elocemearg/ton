@@ -1,5 +1,5 @@
-#ifndef _TTTACCEPT_H
-#define _TTTACCEPT_H
+#ifndef _TONACCEPT_H
+#define _TONACCEPT_H
 
 #include <stdbool.h>
 #include <sys/types.h>
@@ -8,8 +8,8 @@
 #include "session.h"
 #include "encryption.h"
 
-/* TTT accept connection context. */
-struct tttacctx {
+/* TON accept connection context. */
+struct tonacctx {
     int listen_socket4, listen_socket6;
     unsigned short listen_port4, listen_port6;
 
@@ -18,26 +18,26 @@ struct tttacctx {
     /* Session key derived from the passphrase and salt we're passed on
      * initialisation. This is the pre-shared key we use in the TLS handshake
      * to encrypt our session with whoever connects to us. */
-    unsigned char session_key[TTT_KEY_SIZE];
+    unsigned char session_key[TON_KEY_SIZE];
 
     /* A linked list of partially-set-up sessions we've received so far.
      * We take the first one which successfully completes a handshake. */
-    struct ttt_session *sessions;
+    struct ton_session *sessions;
 };
 
 /* Create a context to accept the right connection. This opens a listening
  * socket. */
 int
-tttacctx_init(struct tttacctx *ctx, const char *listen_addr_ipv4,
+tonacctx_init(struct tonacctx *ctx, const char *listen_addr_ipv4,
         const char *listen_addr_ipv6, int address_families,
         unsigned short listen_port, bool use_tls, const char *passphrase,
         size_t passphrase_len, const unsigned char *salt, size_t salt_len);
 
 /* Get the port number on which this accept context is listening. Useful if
- * 0 was supplied to tttacctx_init() and now you want to know what actual
+ * 0 was supplied to tonacctx_init() and now you want to know what actual
  * port number was allocated. */
 unsigned short
-tttacctx_get_listen_port(struct tttacctx *ctx, int address_family);
+tonacctx_get_listen_port(struct tonacctx *ctx, int address_family);
 
 /* Accept the right connection. The right connection is the first one that
  * connects to our listening socket and successfully handshakes. For plain
@@ -48,7 +48,7 @@ tttacctx_get_listen_port(struct tttacctx *ctx, int address_family);
  *
  * The listening and handshaking is done in a non-blocking and resumable way.
  * It will time out of after timeout_ms, after which the process can be resumed
- * by re-calling tttacctx_accept().
+ * by re-calling tonacctx_accept().
  *
  * If an incoming connection's handshake fails, it is quietly dropped.
  *
@@ -58,18 +58,18 @@ tttacctx_get_listen_port(struct tttacctx *ctx, int address_family);
  * Return value:
  * 1: we successfully accepted a connection and the handshake succeeded. The
  *    session details are in *new_session. The caller may now call
- *    tttacctx_destroy() to close the listening socket and close any other
+ *    tonacctx_destroy() to close the listening socket and close any other
  *    connections still open.
  * 0: we timed out. The caller can call the function again to resume.
  * -1: some error occurred.
  */
 int
-tttacctx_accept(struct tttacctx *ctx, int timeout_ms, struct ttt_session *new_session);
+tonacctx_accept(struct tonacctx *ctx, int timeout_ms, struct ton_session *new_session);
 
-/* Destroy a TTT accept connnection context. This closes the listening socket
+/* Destroy a TON accept connnection context. This closes the listening socket
  * and closes any connections it received that are still open, but it does NOT
- * close any session returned by a successful call to tttacctx_accept(). */
+ * close any session returned by a successful call to tonacctx_accept(). */
 void
-tttacctx_destroy(struct tttacctx *ctx);
+tonacctx_destroy(struct tonacctx *ctx);
 
 #endif

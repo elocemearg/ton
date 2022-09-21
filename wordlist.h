@@ -1,10 +1,10 @@
-#ifndef _TTTWORDLIST_H
-#define _TTTWORDLIST_H
+#ifndef _TONWORDLIST_H
+#define _TONWORDLIST_H
 
-int ttt_wordlist_get_max_word_length(void);
+int ton_wordlist_get_max_word_length(void);
 
-const char *ttt_wordlist_get_word(int n);
+const char *ton_wordlist_get_word(int n);
 
-int ttt_wordlist_length(void);
+int ton_wordlist_length(void);
 
 #endif

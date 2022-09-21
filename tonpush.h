@@ -1,5 +1,5 @@
-#ifndef _TTTPUSH_H
-#define _TTTPUSH_H
+#ifndef _TONPUSH_H
+#define _TONPUSH_H
 
 int main_push(int argc, char **argv);
 

@@ -2,10 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "tttpush.h"
-#include "tttpull.h"
-#ifdef TTT_UNIT_TESTS
-#include "ttttest.h"
+#include "tonpush.h"
+#include "tonpull.h"
+#ifdef TON_UNIT_TESTS
+#include "tontest.h"
 #endif
 #include "utils.h"
 
@@ -13,14 +13,14 @@ int main(int argc, char **argv) {
     char *verb;
     int ret = 0;
 
-    ttt_sockets_setup();
+    ton_sockets_setup();
 
     if (argc < 2) {
         fprintf(stderr,
 "Usage:\n"
-"    ttt push [options] <file> ...\n"
-"    ttt pull [options]\n"
-"Run ttt push -h or ttt pull -h for further help.\n");
+"    ton push [options] <file> ...\n"
+"    ton pull [options]\n"
+"Run ton push -h or ton pull -h for further help.\n");
         exit(1);
     }
 
@@ -32,19 +32,19 @@ int main(int argc, char **argv) {
         ret = main_pull(argc - 1, argv + 1);
     }
     else if (!strcmp(verb, "test")) {
-#ifdef TTT_UNIT_TESTS
+#ifdef TON_UNIT_TESTS
         ret = main_test(argc - 1, argv + 1);
 #else
-        fprintf(stderr, "ttt was not compiled with CUnit support.\n");
+        fprintf(stderr, "ton was not compiled with CUnit support.\n");
         ret = 1;
 #endif
     }
     else {
-        fprintf(stderr, "Unknown command %s\nTry \"ttt push\" or \"ttt pull\".\n", verb);
+        fprintf(stderr, "Unknown command %s\nTry \"ton push\" or \"ton pull\".\n", verb);
         ret = 1;
     }
 
-    ttt_sockets_teardown();
+    ton_sockets_teardown();
 
     return ret;
 }

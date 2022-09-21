@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
             case 't':
                 multicast_ttl = atoi(optarg);
                 if (multicast_ttl < 1 || multicast_ttl > 10) {
-                    ttt_error(1, 0, "multicast TTL must be between 1 and 10");
+                    ton_error(1, 0, "multicast TTL must be between 1 and 10");
                 }
                 break;
 
@@ -74,18 +74,18 @@ int main(int argc, char **argv) {
     }
 
     if (listen_mode) {
-        struct ttt_session sess;
+        struct ton_session sess;
         int rc;
 
         if (secret == NULL || secret[0] == '\0') {
-            secret = ttt_generate_passphrase(4);
+            secret = ton_generate_passphrase(4);
             fprintf(stderr, "Generated passphrase:\n%s\n", secret);
         }
 
-        rc = ttt_discover_and_connect(NULL, NULL, TTT_IP_BOTH, discover_port,
+        rc = ton_discover_and_connect(NULL, NULL, TON_IP_BOTH, discover_port,
                 secret, strlen(secret), 1, NULL, NULL, NULL, NULL, &sess);
         if (rc < 0) {
-            ttt_error(1, 0, "failed to discover and connect to remote host");
+            ton_error(1, 0, "failed to discover and connect to remote host");
         }
 
         /* If we get here, we connected to the host and successfully
@@ -95,27 +95,27 @@ int main(int argc, char **argv) {
          * but in this test application we just send a short message. */
         int len = sess.write(&sess, payload_message, strlen(payload_message));
         if (len < 0) {
-            ttt_error(0, errno, "send");
+            ton_error(0, errno, "send");
         }
         else {
             sess.write(&sess, "\n", 1);
         }
-        ttt_session_destroy(&sess);
+        ton_session_destroy(&sess);
     }
     else {
-        struct ttt_session tcp_session;
+        struct ton_session tcp_session;
         int tcp_session_valid = 0;
         int rc;
 
         if (secret == NULL || secret[0] == '\0') {
-            secret = ttt_prompt_passphrase("Passphrase? ");
+            secret = ton_prompt_passphrase("Passphrase? ");
         }
 
-        rc = ttt_discover_and_accept(NULL, NULL, TTT_IP_BOTH, TTT_ANNOUNCE_BOTH,
+        rc = ton_discover_and_accept(NULL, NULL, TON_IP_BOTH, TON_ANNOUNCE_BOTH,
                 discover_port, num_announcements, announcement_gap_ms,
                 multicast_ttl, secret, strlen(secret), 1, &tcp_session);
         if (rc < 0) {
-            ttt_error(1, 0, "failed to discover and accept connection");
+            ton_error(1, 0, "failed to discover and accept connection");
         }
         else {
             tcp_session_valid = 1;
@@ -128,17 +128,17 @@ int main(int argc, char **argv) {
             char buf[100];
             int len = tcp_session.read(&tcp_session, buf, sizeof(buf));
             if (len < 0) {
-                ttt_error(0, errno, "read");
+                ton_error(0, errno, "read");
                 exit_status = 1;
             }
             else if (len == 0) {
-                ttt_error(0, 0, "peer closed connection without sending anything");
+                ton_error(0, 0, "peer closed connection without sending anything");
                 exit_status = 1;
             }
             else {
                 printf("Message: %.*s\n", len, buf);
             }
-            ttt_session_destroy(&tcp_session);
+            ton_session_destroy(&tcp_session);
         }
     }
 

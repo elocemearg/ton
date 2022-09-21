@@ -1,37 +1,37 @@
-#ifndef _TTTCRYPT_H
-#define _TTTCRYPT_H
+#ifndef _TONCRYPT_H
+#define _TONCRYPT_H
 
 #include <stdbool.h>
 
-#define TTT_KEY_SIZE 32
+#define TON_KEY_SIZE 32
 
 int
-ttt_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
+ton_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
         size_t dest_max, const char *secret, size_t secret_len,
         unsigned char *salt /* pointer to 8 bytes */);
 
 int
-ttt_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
+ton_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
         size_t dest_max, const char *secret, size_t secret_len,
         const unsigned char *salt /* pointer to 8 bytes */);
 
 int
-ttt_set_random_bytes(char *dest, size_t length);
+ton_set_random_bytes(char *dest, size_t length);
 
 /* Use OpenSSL's RAND_bytes to generate and return a random integer between 0
  * and max - 1 inclusive. exit(1) if we fail to do this. */
 int
-ttt_secure_randint(int max);
+ton_secure_randint(int max);
 
 int
-ttt_passphrase_to_key(const char *passphrase, size_t passphrase_len,
+ton_passphrase_to_key(const char *passphrase, size_t passphrase_len,
         const unsigned char *salt, size_t salt_len, unsigned char *key_dest,
         size_t key_dest_size);
 
 char *
-ttt_prompt_passphrase(const char *prompt, bool hide_passphrase);
+ton_prompt_passphrase(const char *prompt, bool hide_passphrase);
 
 char *
-ttt_generate_passphrase(int num_words);
+ton_generate_passphrase(int num_words);
 
 #endif

@@ -34,11 +34,11 @@ static const int max_word_length = %d;
 """ % (num_words, max_length))
 
 print("""
-int ttt_wordlist_get_max_word_length(void) {
+int ton_wordlist_get_max_word_length(void) {
     return max_word_length;
 }
 
-const char *ttt_wordlist_get_word(int n) {
+const char *ton_wordlist_get_word(int n) {
     if (n < 0 || n >= num_words) {
         return NULL;
     }
@@ -47,7 +47,7 @@ const char *ttt_wordlist_get_word(int n) {
     }
 }
 
-int ttt_wordlist_length(void) {
+int ton_wordlist_length(void) {
     return num_words;
 }
 """)
