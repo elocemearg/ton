@@ -1,11 +1,11 @@
 
-CUNIT=1
+CUNIT=${TON_CUNIT}
 
-CFLAGS=-Wall -g -DUNIX=1
+CFLAGS=-Wall -g -DUNIX=1 -std=gnu99 -Wpedantic
 LDFLAGS=-lcrypto -lssl
 
 ifeq ($(CUNIT),1)
-	CFLAGS := $(CFLAGS) -DTON_UNIT_TESTS -std=gnu99 -Wpedantic
+	CFLAGS := $(CFLAGS) -DTON_UNIT_TESTS
 	LDFLAGS := $(LDFLAGS) -lcunit
 endif
 

@@ -4,6 +4,7 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <errno.h>
 
 #include "encryption.h"
 #include "utils.h"
