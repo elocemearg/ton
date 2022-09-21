@@ -72,6 +72,8 @@ tonacctx_destroy(struct tonacctx *ctx) {
         next = s->next;
         tonacctx_free_session(ctx, s);
     }
+
+    free(ctx->passphrase);
 }
 
 static int
@@ -196,6 +198,11 @@ tonacctx_init(struct tonacctx *ctx, const char *listen_addr4,
         ctx->passphrase = malloc(passphrase_length + 1);
         memcpy(ctx->passphrase, passphrase, passphrase_length);
         ctx->passphrase[passphrase_length] = '\0';
+        ctx->passphrase_length = passphrase_length;
+    }
+    else {
+        ctx->passphrase = NULL;
+        ctx->passphrase_length = 0;
     }
 
     return 0;

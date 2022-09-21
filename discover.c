@@ -1275,9 +1275,9 @@ ton_discover_and_accept(struct ton_discover_options *opts, struct ton_session *n
 
     if (opts->verbose) {
         if (invitation_port4)
-            ton_error(0, 0, "IPv4: waiting for incoming connection on port %d...\n", invitation_port4);
+            ton_error(0, 0, "IPv4: waiting for incoming connection on port %d...", invitation_port4);
         if (invitation_port6)
-            ton_error(0, 0, "IPv6: waiting for incoming connection on port %d...\n", invitation_port6);
+            ton_error(0, 0, "IPv6: waiting for incoming connection on port %d...", invitation_port6);
     }
 
     /* Send a number of announcements, with a suitable time gap in between.

@@ -671,18 +671,26 @@ ton_msg_send(struct ton_session *sess, struct ton_msg *msg) {
  */
 static int
 ton_send_message(struct ton_session *sess, int tag, ...) {
-    struct ton_msg msg;
+    struct ton_msg *msg;
     va_list ap;
     int rc;
 
+    msg = ton_msg_alloc();
+    if (msg == NULL)
+        return -1;
+
     va_start(ap, tag);
-    rc = ton_build_message(&msg, tag, ap);
+    rc = ton_build_message(msg, tag, ap);
     va_end(ap);
 
-    if (rc != 0)
+    if (rc != 0) {
+        ton_msg_free(msg);
         return rc;
+    }
 
-    rc = ton_msg_send(sess, &msg);
+    rc = ton_msg_send(sess, msg);
+    ton_msg_free(msg);
+
     if (rc < 0)
         return -1;
 
@@ -799,27 +807,37 @@ ton_get_next_message(struct ton_session *sess, struct ton_msg *msg, struct ton_d
  */
 static int
 ton_receive_reply_report_error(struct ton_session *sess) {
-    struct ton_msg msg;
+    struct ton_msg *msg;
     struct ton_decoded_msg decoded;
     int rc;
 
-    rc = ton_get_next_message(sess, &msg, &decoded);
-    if (rc != 0)
+    msg = ton_msg_alloc();
+    if (msg == NULL) {
+        return -1;
+    }
+
+    rc = ton_get_next_message(sess, msg, &decoded);
+    if (rc != 0) {
+        ton_msg_free(msg);
         return rc;
+    }
 
     switch (decoded.tag) {
         case TON_MSG_OK:
-            return 0;
+            rc = 0;
+            break;
         case TON_MSG_ERROR:
         case TON_MSG_FATAL_ERROR:
             ton_error(0, 0, "received %serror from remote host: 0x%08x: %s",
                     decoded.tag == TON_MSG_FATAL_ERROR ? "fatal " : "",
                     decoded.u.err.code, decoded.u.err.message);
-            return decoded.tag == TON_MSG_ERROR ? TON_ERR_REMOTE_ERROR : TON_ERR_REMOTE_FATAL_ERROR;
+            rc = (decoded.tag == TON_MSG_ERROR ? TON_ERR_REMOTE_ERROR : TON_ERR_REMOTE_FATAL_ERROR);
         default:
             ton_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
-            return TON_ERR_PROTOCOL;
+            rc = TON_ERR_PROTOCOL;
     }
+    ton_msg_free(msg);
+    return rc;
 }
 
 /* Call the progress report callback in ctx and update
@@ -892,7 +910,7 @@ ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
         long file_number, long file_count, long long *bytes_sent_so_far,
         long long *total_size, long num_files_skipped, struct ton_file *f,
         bool *file_failed) {
-    struct ton_msg msg;
+    struct ton_msg *msg = NULL;
     FILE *stream = NULL;
     size_t bytes_read = 0;
     int return_value = 0;
@@ -902,6 +920,11 @@ ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
 
     /* Send a metadata message, so the receiver knows to expect a file. */
     if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path) < 0) {
+        goto fail;
+    }
+
+    msg = ton_msg_alloc();
+    if (msg == NULL) {
         goto fail;
     }
 
@@ -937,10 +960,10 @@ ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
             int max_length;
 
             /* Initialise a file data chunk */
-            ton_msg_file_data_chunk(&msg);
+            ton_msg_file_data_chunk(msg);
 
-            max_length = ton_msg_file_data_chunk_get_max_length(&msg);
-            msg_data_dest = ton_msg_file_data_chunk_data_ptr(&msg);
+            max_length = ton_msg_file_data_chunk_get_max_length(msg);
+            msg_data_dest = ton_msg_file_data_chunk_data_ptr(msg);
 
             /* Read up to max_length bytes from the file into the message */
             errno = 0;
@@ -972,10 +995,10 @@ ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
             }
             else {
                 /* Set the length field of the chunk message... */
-                ton_msg_file_data_chunk_set_length(&msg, (int) bytes_read);
+                ton_msg_file_data_chunk_set_length(msg, (int) bytes_read);
 
                 /* Now send the chunk message */
-                if (ton_msg_send(sess, &msg) < 0)
+                if (ton_msg_send(sess, msg) < 0)
                     goto fail;
 
                 file_position += bytes_read;
@@ -1005,6 +1028,8 @@ end:
     if (stream && stream != stdin) {
         fclose(stream);
     }
+
+    ton_msg_free(msg);
 
     return return_value;
 
@@ -1186,13 +1211,19 @@ static int
 ton_receive_file_metadata_set(struct ton_session *sess,
         const TON_LF_CHAR *output_dir, struct ton_file_list *list,
         long long *file_count_out, long long *total_size_out) {
-    struct ton_msg msg;
+    struct ton_msg *msg;
     struct ton_decoded_msg decoded;
     long long file_count = 0, total_size = 0;
     bool received_summary = false;
+    int return_value = 0;
+
+    msg = ton_msg_alloc();
+    if (msg == NULL) {
+        goto fail;
+    }
 
     do {
-        if (ton_get_next_message(sess, &msg, &decoded) != 0) {
+        if (ton_get_next_message(sess, msg, &decoded) != 0) {
             goto fail;
         }
         if (decoded.tag == TON_MSG_FILE_METADATA_SUMMARY) {
@@ -1230,11 +1261,14 @@ ton_receive_file_metadata_set(struct ton_session *sess,
     if (total_size_out)
         *total_size_out = total_size;
 
-    return 0;
+end:
+    ton_msg_free(msg);
+    return return_value;
 
 fail:
     ton_file_list_destroy(list);
-    return -1;
+    return_value = -1;
+    goto end;
 }
 
 /* Write a progress counter to stderr showing how far we are through the
@@ -1329,7 +1363,7 @@ static int
 ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
         struct ton_file_list *list, long long file_count, long long total_size,
         long long *receiver_skipped_count, long long *sender_failed_file_count) {
-    struct ton_msg msg;
+    struct ton_msg *msg = NULL;
     struct ton_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
     TON_LF_CHAR *local_filename = NULL; /* name of current or last file received */
@@ -1350,8 +1384,13 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
     gettimeofday(&now, NULL);
     timeval_add(&now, &progress_report_interval, &next_progress_report);
 
+    msg = ton_msg_alloc();
+    if (msg == NULL) {
+        goto fail;
+    }
+
     do {
-        if (ton_get_next_message(sess, &msg, &decoded) != 0) {
+        if (ton_get_next_message(sess, msg, &decoded) != 0) {
             goto fail;
         }
         gettimeofday(&now, NULL);
@@ -1594,6 +1633,7 @@ end:
     free(ton_filename);
     if (current_file && current_file != ctx->output_file)
         fclose(current_file);
+    ton_msg_free(msg);
     return return_value;
 
 fail:
@@ -1634,7 +1674,7 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
         long long *receiver_skipped_file_count_out,
         long long *sender_failed_file_count_out) {
     struct ton_file_list list;
-    struct ton_msg msg;
+    struct ton_msg *msg = NULL;
     struct ton_decoded_msg decoded;
     int return_value = 0;
     int rc;
@@ -1645,8 +1685,13 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
 
     ton_file_list_init(&list);
 
+    msg = ton_msg_alloc();
+    if (msg == NULL) {
+        goto fail;
+    }
+
     do {
-        rc = ton_get_next_message(sess, &msg, &decoded);
+        rc = ton_get_next_message(sess, msg, &decoded);
         if (rc != 0) {
             goto fail;
         }
@@ -1729,6 +1774,7 @@ end:
     if (receiver_skipped_file_count_out)
         *receiver_skipped_file_count_out = receiver_skipped_file_count;
 
+    ton_msg_free(msg);
     ton_file_list_destroy(&list);
     return return_value;
 

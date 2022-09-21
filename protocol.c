@@ -76,6 +76,24 @@ int64_hton(unsigned char *buf, int offset, int64_t value) {
     memcpy(buf + offset + 4, &lo, sizeof(lo));
 }
 
+struct ton_msg *
+ton_msg_alloc(void) {
+    struct ton_msg *msg = malloc(sizeof(struct ton_msg));
+    if (msg == NULL) {
+        ton_error(0, errno, "failed to allocate memory for new message");
+    }
+    else {
+        msg->position = 0;
+        msg->length = 0;
+    }
+    return msg;
+}
+
+void
+ton_msg_free(struct ton_msg *msg) {
+    free(msg);
+}
+
 void
 ton_msg_clear(struct ton_msg *msg) {
     msg->position = 0;

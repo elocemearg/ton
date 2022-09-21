@@ -349,6 +349,9 @@ ton_session_hello(struct ton_session *s) {
                 s->session_key, TON_KEY_SIZE) < 0) {
         goto fail;
     }
+    if (s->passphrase_length == 0) {
+        ton_error(0, 0, "warning: passphrase is empty");
+    }
 
     /* Add the mapping (s->ssl -> (session key)) to the global list, so
      * that the callbacks psk_server_cb and psk_client_cb can find it.
@@ -590,6 +593,11 @@ ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
         }
         memcpy(s->passphrase, passphrase, passphrase_length);
         s->passphrase[passphrase_length] = '\0';
+        s->passphrase_length = passphrase_length;
+    }
+    else {
+        s->passphrase = NULL;
+        s->passphrase_length = 0;
     }
 
     if (use_tls) {
@@ -624,6 +632,7 @@ ton_session_destroy(struct ton_session *s) {
     if (s->ssl) {
         ton_remove_session_key(s->ssl);
     }
+    free(s->passphrase);
     s->destroy(s);
 }
 

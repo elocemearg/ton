@@ -320,6 +320,18 @@ struct ton_decoded_msg {
     } u;
 };
 
+/* Allocate and return a pointer to a new ton_msg object. The position and
+ * length fields will be initialised to 0. The contents of the data array
+ * is undefined.
+ * If we fail to allocate enough memory, an error message is printed with
+ * ton_error() and we return NULL. */
+struct ton_msg *
+ton_msg_alloc(void);
+
+/* Free a ton_msg previously created by ton_msg_alloc(). */
+void
+ton_msg_free(struct ton_msg *msg);
+
 /* Set the position and length fields of a ton_msg to 0. */
 void
 ton_msg_clear(struct ton_msg *msg);
