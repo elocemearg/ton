@@ -15,10 +15,8 @@ struct tonacctx {
 
     bool use_tls;
 
-    /* Session key derived from the passphrase and salt we're passed on
-     * initialisation. This is the pre-shared key we use in the TLS handshake
-     * to encrypt our session with whoever connects to us. */
-    unsigned char session_key[TON_KEY_SIZE];
+    char *passphrase;
+    size_t passphrase_length;
 
     /* A linked list of partially-set-up sessions we've received so far.
      * We take the first one which successfully completes a handshake. */
@@ -31,7 +29,7 @@ int
 tonacctx_init(struct tonacctx *ctx, const char *listen_addr_ipv4,
         const char *listen_addr_ipv6, int address_families,
         unsigned short listen_port, bool use_tls, const char *passphrase,
-        size_t passphrase_len, const unsigned char *salt, size_t salt_len);
+        size_t passphrase_length);
 
 /* Get the port number on which this accept context is listening. Useful if
  * 0 was supplied to tonacctx_init() and now you want to know what actual

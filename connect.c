@@ -28,7 +28,8 @@ tonmcctx_free_session(struct tonmcctx *ctx, struct ton_session *s) {
 
 static struct ton_session *
 tonmcctx_add_session(struct tonmcctx *ctx, int new_socket,
-        struct sockaddr *addr, socklen_t addr_len, const unsigned char *key) {
+        struct sockaddr *addr, socklen_t addr_len, const char *passphrase,
+        size_t passphrase_length) {
     struct ton_session *s;
     int rc;
 
@@ -40,7 +41,7 @@ tonmcctx_add_session(struct tonmcctx *ctx, int new_socket,
     /* Initialise a TLS session, which when we do the handshake will take the
      * role of client. ton_session doesn't need to know that new_socket hasn't
      * actually connected yet. */
-    rc = ton_session_init(s, new_socket, addr, addr_len, true, false, key);
+    rc = ton_session_init(s, new_socket, addr, addr_len, true, false, passphrase, passphrase_length);
     if (rc < 0) {
         free(s);
         return NULL;
@@ -138,7 +139,7 @@ tonmcctx_fdset_contains_sockets(struct tonmcctx *ctx, fd_set *set) {
 
 struct ton_session *
 tonmcctx_add_connect(struct tonmcctx *ctx, struct sockaddr *addr,
-        socklen_t addr_len, const unsigned char *key) {
+        socklen_t addr_len, const char *passphrase, size_t passphrase_length) {
     int sock = -1;
     struct ton_session *s;
 
@@ -147,7 +148,7 @@ tonmcctx_add_connect(struct tonmcctx *ctx, struct sockaddr *addr,
         return NULL;
     }
 
-    s = tonmcctx_add_session(ctx, sock, addr, addr_len, key);
+    s = tonmcctx_add_session(ctx, sock, addr, addr_len, passphrase, passphrase_length);
     if (s == NULL) {
         close(sock);
         return NULL;

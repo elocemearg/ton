@@ -7,13 +7,11 @@
 
 int
 ton_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len,
-        unsigned char *salt /* pointer to 8 bytes */);
+        size_t dest_max, const char *secret, size_t secret_len);
 
 int
 ton_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len,
-        const unsigned char *salt /* pointer to 8 bytes */);
+        size_t dest_max, const char *secret, size_t secret_len);
 
 int
 ton_set_random_bytes(char *dest, size_t length);

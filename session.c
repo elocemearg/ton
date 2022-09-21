@@ -224,9 +224,9 @@ ton_socket_flush(int sock) {
 }
 
 /* Make progress on a pre-TLS-handshake "hello" exchange, where the client
- * sends the server a TON_HELLO_SIZE-byte hello message, and the server replies
- * with its own hello message. This contains information like which version of
- * the wire protocol each side supports.
+ * sends the server a TON_CLIENT_HELLO_SIZE-byte hello message, and the server
+ * replies with its own TON_SERVER_HELLO_SIZE-byte hello message. This contains
+ * information like which version of the wire protocol each side supports.
  *
  * This may be called with s->sock blocking or non-blocking.
  *
@@ -241,14 +241,14 @@ static int
 ton_session_hello(struct ton_session *s) {
     int rc;
 
-    while (s->client_hello_pos < TON_HELLO_SIZE) {
+    while (s->client_hello_pos < TON_CLIENT_HELLO_SIZE) {
         /* Client sends their hello first */
         if (s->is_server)
             rc = recv(s->sock, (char *) s->client_hello + s->client_hello_pos,
-                    TON_HELLO_SIZE - s->client_hello_pos, 0);
+                    TON_CLIENT_HELLO_SIZE - s->client_hello_pos, 0);
         else
             rc = send(s->sock, (char *) s->client_hello + s->client_hello_pos,
-                    TON_HELLO_SIZE - s->client_hello_pos, 0);
+                    TON_CLIENT_HELLO_SIZE - s->client_hello_pos, 0);
         if (rc < 0 && ton_would_block()) {
             /* Can't proceed without blocking */
             if (s->is_server)
@@ -270,7 +270,7 @@ ton_session_hello(struct ton_session *s) {
         else {
             /* No error and we sent or received 1 or more bytes */
             s->client_hello_pos += rc;
-            if (s->client_hello_pos == TON_HELLO_SIZE && !s->is_server) {
+            if (s->client_hello_pos == TON_CLIENT_HELLO_SIZE && !s->is_server) {
                 /* Finished sending hello message, and we aren't going to send
                  * anything more until we receive a reply to it. Flush the
                  * socket so that it doesn't get unnecessarily delayed. */
@@ -279,14 +279,14 @@ ton_session_hello(struct ton_session *s) {
         }
     }
 
-    while (s->client_hello_pos == TON_HELLO_SIZE && s->server_hello_pos < TON_HELLO_SIZE) {
+    while (s->client_hello_pos == TON_CLIENT_HELLO_SIZE && s->server_hello_pos < TON_SERVER_HELLO_SIZE) {
         /* Then the server replies with their hello */
         if (s->is_server)
             rc = send(s->sock, (char *) s->server_hello + s->server_hello_pos,
-                    TON_HELLO_SIZE - s->server_hello_pos, 0);
+                    TON_SERVER_HELLO_SIZE - s->server_hello_pos, 0);
         else
             rc = recv(s->sock, (char *) s->server_hello + s->server_hello_pos,
-                    TON_HELLO_SIZE - s->server_hello_pos, 0);
+                    TON_SERVER_HELLO_SIZE - s->server_hello_pos, 0);
         if (rc < 0 && ton_would_block()) {
             /* We can't proceed without blocking */
             if (s->is_server)
@@ -307,7 +307,7 @@ ton_session_hello(struct ton_session *s) {
         else {
             /* We sent/received some data */
             s->server_hello_pos += rc;
-            if (s->server_hello_pos == TON_HELLO_SIZE && s->is_server) {
+            if (s->server_hello_pos == TON_SERVER_HELLO_SIZE && s->is_server) {
                 ton_socket_flush(s->sock);
             }
         }
@@ -316,8 +316,8 @@ ton_session_hello(struct ton_session *s) {
     /* If we get here, we have completed the hello exchange. Check that the
      * client and server protocol ranges are compatible and return some
      * good or bad news. */
-    assert(s->client_hello_pos == TON_HELLO_SIZE);
-    assert(s->server_hello_pos == TON_HELLO_SIZE);
+    assert(s->client_hello_pos == TON_CLIENT_HELLO_SIZE);
+    assert(s->server_hello_pos == TON_SERVER_HELLO_SIZE);
 
     unsigned char *their_hello = (s->is_server ? s->client_hello : s->server_hello);
     const uint16_t our_min = TON_OUR_MIN_PROTOCOL_VERSION;
@@ -342,6 +342,19 @@ ton_session_hello(struct ton_session *s) {
     s->their_flags = their_flags;
     s->protocol_version = ((their_max < our_max) ? their_max : our_max);
 
+    /* Derive the pre-shared key from the passphrase and the salt, which
+     * the client sent the server in the hello message. */
+    if (ton_passphrase_to_key(s->passphrase, s->passphrase_length,
+                s->client_hello + TON_HELLO_SALT_OFFSET, TON_HELLO_SALT_LENGTH,
+                s->session_key, TON_KEY_SIZE) < 0) {
+        goto fail;
+    }
+
+    /* Add the mapping (s->ssl -> (session key)) to the global list, so
+     * that the callbacks psk_server_cb and psk_client_cb can find it.
+     * These will be called during the TLS handshake. */
+    ton_set_session_key(s->ssl, s->session_key);
+
     /* fprintf(stderr, "their magic 0x%08x, their min %hu, their max %hu, their flags 0x%08x, negotiated protocol version %hu\n", their_magic, their_min, their_max, their_flags, s->protocol_version); */
 
     /* Indicate hello exchange was successful, and we're talking to a client
@@ -359,7 +372,7 @@ ton_session_tls_handshake(struct ton_session *s) {
 
     /* If we haven't got the pre-handshake hello out of the way, make some
      * progress with that. */
-    if (s->server_hello_pos < TON_HELLO_SIZE) {
+    if (s->server_hello_pos < TON_SERVER_HELLO_SIZE) {
         rc = ton_session_hello(s);
         if (rc < 0) {
             /* *fail horns* */
@@ -372,7 +385,7 @@ ton_session_tls_handshake(struct ton_session *s) {
 
         /* Otherwise, hello exchange should have completed, and we can move
          * on to the TLS handshake. */
-        assert(s->server_hello_pos == TON_HELLO_SIZE);
+        assert(s->server_hello_pos == TON_SERVER_HELLO_SIZE);
         assert(s->protocol_version > 0);
     }
 
@@ -508,10 +521,6 @@ ton_session_tls_init(struct ton_session *s) {
     s->ssl = SSL_new(s->ssl_ctx);
     SSL_set_fd(s->ssl, s->sock);
 
-    /* Add the mapping (s->ssl -> (session key)) to the global list, so
-     * that the callbacks psk_server_cb and psk_client_cb can find it. */
-    ton_set_session_key(s->ssl, s->session_key);
-
     /* Set the appropriate state, ready to start the handshake */
     if (s->is_server) {
         SSL_set_accept_state(s->ssl);
@@ -525,19 +534,28 @@ ton_session_tls_init(struct ton_session *s) {
 
 /* Initialise a TON_HELLO_SIZE-byte hello message with the given information.
  * msg must point to a buffer of TON_HELLO_SIZE bytes. */
-static void
+static int
 ton_session_init_hello_msg(unsigned char *msg, unsigned short min_prot_ver,
-        unsigned short max_prot_ver, unsigned long flags) {
+        unsigned short max_prot_ver, unsigned long flags, bool is_server) {
     *((uint32_t *) (msg + TON_HELLO_MAGIC_OFFSET)) = htonl(TON_HELLO_MAGIC);
     *((uint16_t *) (msg + TON_HELLO_MIN_PROT_OFFSET)) = htons(min_prot_ver);
     *((uint16_t *) (msg + TON_HELLO_MAX_PROT_OFFSET)) = htons(max_prot_ver);
     *((uint32_t *) (msg + TON_HELLO_FLAGS_OFFSET)) = htonl(flags);
+    if (!is_server) {
+        /* Client generates and sends some random salt bytes to be combined
+         * with the passphrase to derive the key. */
+        if (ton_set_random_bytes((char *) msg + TON_HELLO_SALT_OFFSET, TON_HELLO_SALT_LENGTH) < 0) {
+            ton_error(0, 0, "failed to generate random salt");
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int
 ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
         socklen_t addr_len, bool use_tls, bool is_server,
-        const unsigned char *key) {
+        const char *passphrase, size_t passphrase_length) {
     int rc;
 
     memset(s, 0, sizeof(*s));
@@ -559,12 +577,19 @@ ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
     s->our_flags = 0;
 
     /* Set our own hello message ready to send to the other host */
-    ton_session_init_hello_msg(s->is_server ? s->server_hello : s->client_hello,
-            TON_OUR_MIN_PROTOCOL_VERSION, TON_OUR_MAX_PROTOCOL_VERSION,
-            s->our_flags);
+    if (ton_session_init_hello_msg(s->is_server ? s->server_hello : s->client_hello,
+                TON_OUR_MIN_PROTOCOL_VERSION, TON_OUR_MAX_PROTOCOL_VERSION,
+                s->our_flags, s->is_server) < 0) {
+        return -1;
+    }
 
-    if (key) {
-        memcpy(s->session_key, key, TON_KEY_SIZE);
+    if (passphrase != NULL) {
+        s->passphrase = malloc(passphrase_length + 1);
+        if (s->passphrase == NULL) {
+            return -1;
+        }
+        memcpy(s->passphrase, passphrase, passphrase_length);
+        s->passphrase[passphrase_length] = '\0';
     }
 
     if (use_tls) {

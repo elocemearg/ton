@@ -15,13 +15,18 @@
 
 #include "encryption.h"
 
-/* Hello message contains 12 bytes, all in network byte order...
+/* The hello message sent by the client has 20 bytes, and the hello message
+ * sent by the server has 12 bytes. All the integers are in network byte order.
  *
  * Bytes   Type        Description
  * 0-3     int32       Magic number 0x544f4e48 ("TONH")
  * 4-5     int16       Minimum supported protocol version
  * 6-7     int16       Maximum supported protocol version
  * 8-11    int32       Flags (reserved for future use, currently 0)
+ *
+ * (Client hello only)
+ * 12-19   char[8]     Random salt to combine with the passphrase to make the
+ *                     complete pre-shared key for the TLS handshake
  *
  * First the client sends the hello message to the server, then the server
  * replies with its own hello message.
@@ -46,12 +51,15 @@
 #define TON_OUR_MIN_PROTOCOL_VERSION 1
 #define TON_OUR_MAX_PROTOCOL_VERSION 1
 
-#define TON_HELLO_SIZE 12
+#define TON_SERVER_HELLO_SIZE 12
+#define TON_CLIENT_HELLO_SIZE 20
 #define TON_HELLO_MAGIC 0x544f4548
 #define TON_HELLO_MAGIC_OFFSET 0
 #define TON_HELLO_MIN_PROT_OFFSET 4
 #define TON_HELLO_MAX_PROT_OFFSET 6
 #define TON_HELLO_FLAGS_OFFSET 8
+#define TON_HELLO_SALT_OFFSET 12
+#define TON_HELLO_SALT_LENGTH 8
 
 /* TCP session, which can be plaintext or encrypted. Plaintext is for testing
  * only, the default will be encrypted when I've deciphered the OpenSSL docs. */
@@ -65,20 +73,11 @@ struct ton_session {
     /* The underlying socket */
     int sock;
 
-    /* Plain text handshake state, which we have to keep track of because the
-     * handshake is done on non-blocking sockets.
-     * 0 = client is sending hello, server is receiving it.
-     * 1 = server is sending hello, client is receiving it.
-     */
-    int plaintext_handshake_state;
-    char plaintext_handshake_message[10];
-    int plaintext_handshake_message_pos;
-
     /* Pre-SSL hello state, where the client sends its protocol version number
      * and the server replies with its protocol version number. */
-    unsigned char client_hello[TON_HELLO_SIZE];
+    unsigned char client_hello[TON_CLIENT_HELLO_SIZE];
     int client_hello_pos;
-    unsigned char server_hello[TON_HELLO_SIZE];
+    unsigned char server_hello[TON_SERVER_HELLO_SIZE];
     int server_hello_pos;
 
     /* Negotiated protocol version */
@@ -90,8 +89,13 @@ struct ton_session {
     SSL *ssl;
     SSL_CTX *ssl_ctx;
 
+    /* The passphrase from which to derive this session's pre-shared key. */
+    char *passphrase;
+    size_t passphrase_length;
+
     /* Pre-shared key with which to encrypt and authenticate this session,
-     * derived from the passphrase and a salt. */
+     * derived from the pre-shared passphrase, and the salt sent by the client
+     * in the hello message. */
     unsigned char session_key[TON_KEY_SIZE];
 
     /* True if this socket was born by accepting a connection from a listening
@@ -112,7 +116,8 @@ ton_session_get_peer_addr(struct ton_session *s, char *addr_dest, int addr_dest_
 
 int
 ton_session_init(struct ton_session *s, int sock, const struct sockaddr *addr,
-        socklen_t addr_len, bool use_tls, bool is_server, const unsigned char *key);
+        socklen_t addr_len, bool use_tls, bool is_server,
+        const char *passphrase, size_t passphrase_length);
 
 int
 ton_session_handshake(struct ton_session *s);

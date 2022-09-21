@@ -64,15 +64,17 @@ tonmcctx_fdset_contains_sockets(struct tonmcctx *ctx, fd_set *set);
 /* Start a new outgoing connection attempt to the given socket address, and
  * add a new session to our list which uses this socket.
  *
- * key is a pointer to TON_MAX_SIZE bytes, containing the pre-shared key to
- * use with this session. This will be used in the TLS handshake.
+ * The passphrase and length are used in combination with the salt sent in the
+ * client's hello message to derive a pre-shared key with which to encrypt and
+ * authenticate the TLS session.
  *
  * Return the new session if the connection is in progress, or if it
  * immediately succeeded without blocking (unlikely).
  * Return NULL if we couldn't set up the session.
  */
 struct ton_session *
-tonmcctx_add_connect(struct tonmcctx *ctx, struct sockaddr *addr, socklen_t addr_len, const unsigned char *key);
+tonmcctx_add_connect(struct tonmcctx *ctx, struct sockaddr *addr,
+        socklen_t addr_len, const char *passphrase, size_t passphrase_length);
 
 /* For each socket in either of the sets writable_fds or exception_fds,
  * check to see whether the connection attempt has finished.

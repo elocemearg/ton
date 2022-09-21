@@ -29,8 +29,7 @@ ton_passphrase_to_key(const char *passphrase, size_t passphrase_len,
 
 int
 ton_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len,
-        unsigned char *salt_ret /* pointer to 8 bytes */) {
+        size_t dest_max, const char *secret, size_t secret_len) {
     EVP_CIPHER_CTX *ctx = NULL;
     const EVP_CIPHER *cipher = NULL;
     const unsigned char *iv, *salt;
@@ -47,9 +46,6 @@ ton_aes_256_cbc_decrypt(const char *src, size_t src_len, char *dest,
     }
     salt = (const unsigned char *) src;
     iv = (const unsigned char *) src + 8;
-
-    if (salt_ret != NULL)
-        memcpy(salt_ret, salt, 8);
 
     ciphertext = (const unsigned char *) src + 24;
     ciphertext_len = src_len - 24;
@@ -109,13 +105,13 @@ ton_set_random_bytes(char *dest, size_t length) {
 
 int
 ton_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
-        size_t dest_max, const char *secret, size_t secret_len,
-        const unsigned char *salt /* 8 bytes */) {
+        size_t dest_max, const char *secret, size_t secret_len) {
     EVP_CIPHER_CTX *ctx = NULL;
     const EVP_CIPHER *cipher = NULL;
     unsigned char key[TON_KEY_SIZE], iv[16];
     unsigned char *dest_ptr;
-    const size_t salt_len = 8;
+    char salt[8];
+    const size_t salt_len = sizeof(salt);
     char err_buf[256];
     int rc = 0;
     int l;
@@ -123,6 +119,10 @@ ton_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         ton_error(0, 0, "ton_aes_256_cbc_encrypt: EVP_CIPHER_CTX_new() failed");
+        goto fail;
+    }
+
+    if (ton_set_random_bytes(salt, salt_len) < 0) {
         goto fail;
     }
 
@@ -138,7 +138,7 @@ ton_aes_256_cbc_encrypt(const char *src, size_t src_len, char *dest,
     }
 
     /* Convert our passphrase into a key of TON_KEY_SIZE bytes */
-    if (ton_passphrase_to_key(secret, secret_len, salt, salt_len, key, sizeof(key)) < 0) {
+    if (ton_passphrase_to_key(secret, secret_len, (const unsigned char *) salt, salt_len, key, sizeof(key)) < 0) {
         goto fail;
     }
 

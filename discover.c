@@ -92,13 +92,6 @@
 
 struct ton_discover_result {
     uint32_t magic;
-
-    /* Announcer chooses a random salt and uses that for the encryption of each
-     * announcement packet. The salt is included in plaintext in the packet.
-     * The same salt is then used with the passphrase to create the encryption
-     * key for the session. */
-    unsigned char salt[8];
-
     PORT invitation_port;
 };
 
@@ -203,7 +196,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
     else {
         payload_length = ton_aes_256_cbc_decrypt(enc_payload_start,
                 enc_payload_length, payload, sizeof(payload), secret,
-                secret_length, result->salt);
+                secret_length);
         if (payload_length < 0) {
             if (verbose)
                 ton_error(0, 0, "validate_datagram: announcement not encrypted with expected passphrase");
@@ -250,8 +243,7 @@ validate_datagram(void *datagram, int datagram_length, const char *secret,
 
 static int
 make_announce_datagram(char *dest, int dest_max, const char *secret,
-        size_t secret_length, int enc_type, PORT invitation_port,
-        const unsigned char *salt8) {
+        size_t secret_length, int enc_type, PORT invitation_port) {
     char plain[256];
     int plain_payload_length;
     int encrypted_payload_length;
@@ -280,8 +272,7 @@ make_announce_datagram(char *dest, int dest_max, const char *secret,
     else if (enc_type == TON_ENC_AES_256_CBC) {
         encrypted_payload_length = ton_aes_256_cbc_encrypt(plain,
                 plain_payload_length, dest + DISCOVER_RD_OFFSET_PAYLOAD,
-                dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length,
-                salt8);
+                dest_max - DISCOVER_RD_OFFSET_PAYLOAD, secret, secret_length);
         if (encrypted_payload_length < 0) {
             ton_error(0, 0, "make_announce_datagram: ton_aes_256_cbc_encrypt() failed");
             return -1;
@@ -505,7 +496,7 @@ tondlctx_fdset_contains_receivers(struct tondlctx *ctx, fd_set *set) {
 int
 tondlctx_receive(struct tondlctx *dlctx, struct ton_discover_options *opts,
         struct sockaddr_storage *peer_addr_r, int *peer_addr_length_r,
-        PORT *invitation_port_r, unsigned char *salt, size_t *salt_len) {
+        PORT *invitation_port_r) {
     int rc;
     int discovered = 0;
 
@@ -552,8 +543,6 @@ tondlctx_receive(struct tondlctx *dlctx, struct ton_discover_options *opts,
                     *invitation_port_r = result.invitation_port;
                     memcpy(peer_addr_r, &peer_addr, addr_len);
                     *peer_addr_length_r = addr_len;
-                    *salt_len = 8;
-                    memcpy(salt, result.salt, *salt_len);
                     discovered = 1;
                 }
                 if (opts->received_announcement_cb != NULL) {
@@ -655,10 +644,6 @@ tondactx_init(struct tondactx *dactx, struct ton_discover_options *opts) {
     dactx->multicast_address_ipv6 = strdup(opts->multicast_address_ipv6);
     dactx->announce_port = opts->discover_port;
     dactx->announcement_round_seq = 0;
-
-    /* Think up a random salt to use with the encryption of announcement
-     * packets, and encryption of the resulting session */
-    ton_set_random_bytes((char *) dactx->session_salt, sizeof(dactx->session_salt));
 
     /* To maximise the chance of our announcement reaching our peer, we want
      * to try a broadcast packet on every interface on which we can broadcast,
@@ -843,7 +828,7 @@ tondactx_announce(struct tondactx *dactx, struct ton_discover_options *opts) {
 
         datagram_length = make_announce_datagram(datagram, sizeof(datagram),
                 opts->passphrase, opts->passphrase_length,
-                TON_ENC_AES_256_CBC, invitation_port, dactx->session_salt);
+                TON_ENC_AES_256_CBC, invitation_port);
         if (datagram_length < 0) {
             ton_error(0, errno, "discover_announce: failed to build datagram");
             return -1;
@@ -1175,15 +1160,11 @@ ton_discover_and_connect(struct ton_discover_options *opts, struct ton_session *
         }
 
         if (tondlctx_fdset_contains_receivers(&dlctx, &readfds)) {
-            unsigned char salt[8];
-            size_t salt_len = sizeof(salt);
-            unsigned char key[TON_KEY_SIZE];
-
             /* Listen until we receive a valid UDP datagram which was encrypted
              * with our secret. This datagram, when decrypted, tells us which
              * port to make a TCP connection to. */
             rc = tondlctx_receive(&dlctx, opts, &peer_addr, &peer_addr_len,
-                    &peer_invitation_port, salt, &salt_len);
+                    &peer_invitation_port);
             if (rc != 0) {
                 ton_error(0, 0, "tondctx_receive failed.");
                 goto fail;
@@ -1194,10 +1175,8 @@ ton_discover_and_connect(struct ton_discover_options *opts, struct ton_session *
              * will deal with multiple outgoing non-blocking connections. */
             ton_sockaddr_set_port((struct sockaddr *) &peer_addr, peer_invitation_port);
 
-            ton_passphrase_to_key(opts->passphrase, opts->passphrase_length,
-                    salt, salt_len, key, sizeof(key));
-
-            tonmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr, peer_addr_len, key);
+            tonmcctx_add_connect(&mcctx, (struct sockaddr *) &peer_addr,
+                    peer_addr_len, opts->passphrase, opts->passphrase_length);
         }
 
         if (tonmcctx_fdset_contains_sockets(&mcctx, &writefds) ||
@@ -1274,8 +1253,7 @@ ton_discover_and_accept(struct ton_discover_options *opts, struct ton_session *n
     /* Open our listening TCP socket on the invitation port. */
     if (tonacctx_init(&acctx, NULL, NULL, opts->address_families,
                 opts->listen_port, use_tls, opts->passphrase,
-                opts->passphrase_length, dactx.session_salt,
-                sizeof(dactx.session_salt)) < 0) {
+                opts->passphrase_length) < 0) {
         goto fail;
     }
     acctx_valid = true;

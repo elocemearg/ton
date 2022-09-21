@@ -40,7 +40,7 @@ tonacctx_add_session(struct tonacctx *ctx, int new_socket, struct sockaddr *addr
     }
 
     rc = ton_session_init(s, new_socket, addr, addr_len, ctx->use_tls, true,
-            ctx->use_tls ? ctx->session_key : NULL);
+            ctx->passphrase, ctx->passphrase_length);
     if (rc < 0) {
         free(s);
         return NULL;
@@ -163,7 +163,7 @@ int
 tonacctx_init(struct tonacctx *ctx, const char *listen_addr4,
         const char *listen_addr6, int address_families,
         unsigned short listen_port, bool use_tls, const char *passphrase,
-        size_t passphrase_length, const unsigned char *salt, size_t salt_length) {
+        size_t passphrase_length) {
     struct sockaddr_storage addr;
     socklen_t addr_len;
 
@@ -192,8 +192,10 @@ tonacctx_init(struct tonacctx *ctx, const char *listen_addr4,
         ctx->listen_port6 = ntohs(((struct sockaddr_in6 *) &addr)->sin6_port);
     }
 
-    if (ton_passphrase_to_key(passphrase, passphrase_length, salt, salt_length, ctx->session_key, sizeof(ctx->session_key)) < 0) {
-        goto fail;
+    if (passphrase != NULL) {
+        ctx->passphrase = malloc(passphrase_length + 1);
+        memcpy(ctx->passphrase, passphrase, passphrase_length);
+        ctx->passphrase[passphrase_length] = '\0';
     }
 
     return 0;
@@ -388,7 +390,7 @@ int main(int argc, char **argv) {
     int rc;
 
     /* Listen on port 12345 */
-    if (tonacctx_init(&ctx, NULL, NULL, TON_IP_BOTH, 12345, false)) {
+    if (tonacctx_init(&ctx, NULL, NULL, TON_IP_BOTH, 12345, false, "foo", 3)) {
         ton_error(1, 0, "tonacctx_init");
     }
 
