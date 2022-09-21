@@ -150,7 +150,7 @@ ttt_dir_walk_aux(TTT_LF_CHAR *path, int orig_path_start,
                 continue;
 #endif
             if (ttt_lf_len(ent->d_name) > MAX_PATH_COMPONENT_LEN) {
-                ttt_error(0, 0, "can't open %s/%s: subdirectory name too long", path, ent->d_name);
+                ttt_error(0, 0, "can't open " TTT_LF_PRINTF "/" TTT_LF_PRINTF ": subdirectory name too long", path, ent->d_name);
                 ret = 1;
                 continue;
             }
@@ -923,7 +923,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
         }
         if (stream == NULL) {
             int err = errno;
-            ttt_error(0, err, "%s", f->local_path);
+            ttt_error(0, err, TTT_LF_PRINTF, f->local_path);
             if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0)
                 goto fail;
             *file_failed = true;
@@ -956,7 +956,7 @@ ttt_send_file(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                      * message with an error code, to tell the receiver this
                      * file failed to send. The session continues. */
                     int err = errno;
-                    ttt_error(0, err, "%s", f->local_path);
+                    ttt_error(0, err, TTT_LF_PRINTF, f->local_path);
                     *file_failed = true;
                     if (ttt_send_file_data_end(sess, TTT_ERR_FAILED_TO_READ_FILE, "%s", strerror(err)) != 0) {
                         goto fail;
@@ -1111,7 +1111,7 @@ ttt_file_transfer_session_sender(struct ttt_file_transfer *ctx,
             if (!ttt_file_is_stdin(f) && ttt_access(f->local_path, F_OK) != 0 && errno == ENOENT) {
                 /* File existed when we walked the directories, but it's gone
                  * now. Report this as a non-fatal error. */
-                ttt_error(0, 0, "%s no longer exists, not sending it.", f->local_path);
+                ttt_error(0, 0, TTT_LF_PRINTF " no longer exists, not sending it.", f->local_path);
                 num_file_failures++;
                 continue;
             }
@@ -1400,8 +1400,8 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Create the containing directory if it isn't already there */
                 if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
-                    ttt_error(0, err, "failed to create directory for %s", local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for %s: %s", local_filename, strerror(err));
+                    ttt_error(0, err, "failed to create directory for " TTT_LF_PRINTF, local_filename);
+                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for " TTT_LF_PRINTF ": %s", local_filename, strerror(err));
                     goto fail;
                 }
 
@@ -1414,7 +1414,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     errno = EPERM;
                 }
                 if (current_file == NULL) {
-                    ttt_error(0, errno, "skipping %s: failed to open for writing", local_filename);
+                    ttt_error(0, errno, "skipping " TTT_LF_PRINTF ": failed to open for writing", local_filename);
                 }
             }
 #ifndef WINDOWS
@@ -1422,12 +1422,12 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Create a FIFO, creating its containing directories if necessary. */
                 if (ttt_mkdir_parents(local_filename, 0777, true) < 0) {
                     int err = errno;
-                    ttt_error(0, err, "failed to create directory for fifo %s", local_filename);
-                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo %s: %s", local_filename, strerror(err));
+                    ttt_error(0, err, "failed to create directory for fifo " TTT_LF_PRINTF, local_filename);
+                    ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TTT_LF_PRINTF ": %s", local_filename, strerror(err));
                     goto fail;
                 }
                 if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
-                    ttt_error(0, errno, "skipping fifo %s", local_filename);
+                    ttt_error(0, errno, "skipping fifo " TTT_LF_PRINTF, local_filename);
                 }
             }
 #endif
@@ -1439,7 +1439,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                  * its timestamp and permissions. */
                 if (ttt_access(local_filename, F_OK) != 0) {
                     if (ttt_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
-                        ttt_error(0, errno, "failed to create directory %s", local_filename);
+                        ttt_error(0, errno, "failed to create directory " TTT_LF_PRINTF, local_filename);
                     }
                 }
             }
@@ -1467,7 +1467,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                      * Perhaps instead we could just report the error to our
                      * user and ignore the rest of the data for this file? */
                     int err = errno;
-                    ttt_error(0, err, "failed to write to %s", local_filename);
+                    ttt_error(0, err, "failed to write to " TTT_LF_PRINTF, local_filename);
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", ttt_filename, strerror(err));
                     goto fail;
                 }
@@ -1500,7 +1500,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                     /* If we fail to write out a file locally, we treat this
                      * as a fatal error and abort the session. */
                     int err = errno;
-                    ttt_error(0, err, "error on close of %s", local_filename);
+                    ttt_error(0, err, "error on close of " TTT_LF_PRINTF, local_filename);
                     ttt_send_fatal_error(sess, TTT_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ttt_filename, strerror(err));
 
                     /* Try to delete the file */
@@ -1524,12 +1524,12 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                         timbuf.actime = time(NULL);
                         timbuf.modtime = current_file_mtime;
                         if (ttt_utime(local_filename, &timbuf) < 0) {
-                            ttt_error(0, errno, "warning: failed to set modification time of %s", local_filename);
+                            ttt_error(0, errno, "warning: failed to set modification time of " TTT_LF_PRINTF, local_filename);
                         }
                     }
 
                     if (ttt_chmod(local_filename, current_file_mode & 07777) < 0) {
-                        ttt_error(0, errno, "warning: failed to set mode %03o on %s", current_file_mode & 07777, local_filename);
+                        ttt_error(0, errno, "warning: failed to set mode %03o on " TTT_LF_PRINTF, current_file_mode & 07777, local_filename);
                     }
                 }
             }
@@ -1546,7 +1546,7 @@ ttt_receive_file_set(struct ttt_file_transfer *ctx, struct ttt_session *sess,
                 /* Don't expect the rest of this file */
                 if (total_bytes_remaining > 0)
                     total_bytes_remaining -= current_file_size - current_file_position;
-                ttt_error(0, 0, "warning: sender skipped %s: %s", local_filename, decoded.u.err.message);
+                ttt_error(0, 0, "warning: sender skipped " TTT_LF_PRINTF ": %s", local_filename, decoded.u.err.message);
             }
 
             /* We're no longer inside a file transfer, so the next message
