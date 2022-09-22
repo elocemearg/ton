@@ -7,6 +7,7 @@ To build ton on Linux, for Linux:
 Install the following packages, if they are not already installed:
     gcc
     glibc
+    python3 (to generate passphrase word list)
     libssl-dev
     libcunit1 (only if you want to run the unit tests)
     libcunit1-dev (only if you want to run the unit tests)
