@@ -244,6 +244,16 @@ ton_mkdir_parents(const TON_LF_CHAR *pathname_orig, int mode, bool parents_only)
      * /tmp/dest/a.txt we don't try to create "/" */
     for (size_t pos = 1; pos <= pathname_len; pos++) {
         if (pathname[pos] == DIR_SEP || (!parents_only && pathname[pos] == '\0')) {
+            if (pathname[pos - 1] == DIR_SEP) {
+                /* We already did this one */
+                continue;
+            }
+#ifdef WINDOWS
+            if (pathname[pos - 1] == ':') {
+                /* Don't try to stat or create "C:" */
+                continue;
+            }
+#endif
             /* Does pathname[0 to pos] exist as a directory? */
             pathname[pos] = '\0';
             if (ton_stat(pathname, &st) < 0 && errno == ENOENT) {
