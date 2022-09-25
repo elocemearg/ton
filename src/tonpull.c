@@ -63,7 +63,7 @@ static const struct option longopts[] = {
 static void
 print_help(FILE *f) {
     fprintf(f,
-"ton pull: receive a set of files or directories sent over the network\n"
+"ton pull: receive files over a network from someone sending them with \"ton push\"\n"
 "\n"
 "Usage:\n"
 "    ton pull [options] [destination directory]\n"

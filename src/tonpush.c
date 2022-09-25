@@ -246,6 +246,7 @@ main_push(int argc, char **argv) {
     }
 
     if (optind >= argc) {
+	fprintf(stderr, "ton push: send files over the network to someone running \"ton pull\".\n");
         fprintf(stderr, "Usage is:\n    ton push [options] <filename> ...\nUse -h for help.\n");
         exit(1);
     }
