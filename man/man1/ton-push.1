@@ -11,24 +11,21 @@ ton push \- Send a file over the network to someone running \fBton pull\fR
 .SH "DESCRIPTION"
 .PP
 Listen for the presence of a corresponding \fBton pull\fR process on the
-network, then send the given file or files to it.
+network, then send the named files or directories to it.
 .PP
 By default, \fBton push\fR will generate a random passphrase and print it to
-standard error, and the user running \fBton pull\fR is expected to type in that
+standard error. The user running \fBton pull\fR is expected to type in that
 passphrase when prompted. Both endpoints must be on the same network
 (specifically, the pushing side must be able to receive private-address-range
 UDP multicast packets from the pulling side and the pushing side must be able
-to make a TCP connection to the pulling side), and they must be using the same
+to make a TCP connection to the pulling side), and they must use the same
 passphrase.
 .PP
 The supplied pathnames may consist of files or directories. All these files and
-directories will be created and written to in \fBton pull\fR's destination
-directory. In the case of directories, the directory and all its contents are
-sent. Symlinks, device files and socket files are ignored. File permission bits
-are preserved where possible, but some systems do not support all the Unix file
-permissions.
-.PP
-\fBton\fR stands for Transfer Over Network.
+directories will be copied over the network and written to \fBton pull\fR's
+destination directory. Symlinks, device files and socket files are ignored.
+File permission bits are preserved where possible, but some systems do not
+support all the Unix file permissions.
 .
 .SH "OPTIONS"
 .IP "\fB\-4\fR, \fB\-\-ipv4\fR"
@@ -49,11 +46,12 @@ Listen for announcements on global as well as private IP addresses.
 .IP "\fB\-\-multicast-address-ipv4\fR \fIaddress\fR" 
 Specify the IPv4 multicast group address on which we expect to receive
 announcement packets. The \fBton pull\fR process must use the same address.
-The default is 239.199.77.5.
+The default is 239.199.77.5, which is for use on private networks.
 .IP "\fB\-\-multicast-address-ipv6\fR \fIaddress\fR"
 Specify the IPv6 multicast group address on which we expect to receive
 announcement packets. The \fBton pull\fR process must use the same address.
-The default is ff08:5206:dd93:4290:0891:d264:1444:bd21.
+The default is ff08:5206:dd93:4290:0891:d264:1444:bd21, which is a private
+multicast address with organization-local scope.
 .IP "\fB\-\-passphrase\fR \fIstring\fR"
 Use this specific passphrase rather than generating or prompting for one.
 Conventionally a passphrase is multiple words, but it may be any arbitrary
@@ -76,21 +74,24 @@ Show extra diagnostic output, including details of announcement packets
 received and where we're trying to connect to as a result.
 .
 .SH "EXAMPLES"
-.IP "To send a single file"
+.PP
+All these examples assume there's someone on the nework running \fBton pull\fR
+with the same passphrase as us.
+.IP "Send a single file:"
 .nf
 $ \fBton push rickroll.mp3\fR
 .fi
-.IP "To send multiple files"
+.IP "Send multiple files:"
 .nf
 $ \fBton push rickroll.mp3 ./Pictures/cat.jpg\fR
 .fi
-.IP "To send a directory and everything in it"
+.IP "Send a directory and everything in it:"
 .nf
 $ \fBton push ./Pictures/\fR
 .fi
-.IP "To send a file, not use IPv6, and supply your own passphrase"
+.IP "Send a file, not use IPv6, and supply your own passphrase:"
 .nf
 $ \fBton push -4 --passphrase "hovercraft full of eels" ./cat.jpg\fR
 .fi
 .SH "SEE ALSO"
-\fBton-pull\fR(1)
+\fBton\fR(1), \fBton-pull\fR(1)

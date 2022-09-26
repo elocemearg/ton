@@ -16,15 +16,13 @@ the same network, and write the received files to \fIdestinationdir\fR.
 If no passphrase is specified on the command line with (\fB\-\-passphrase\fR),
 \fBton pull\fR will prompt for one. This must be the same passphrase as used by
 the \fBton push\fR process and both endpoints must be on the same network.
-Specifically, a UDP multicast packet must be able to reach one endpoint from
-the other.
+Specifically, a UDP multicast packet must be able to find its way from here
+to the pushing process, and it must be able to make a TCP connection to us.
 .PP
 The received file or files will be saved in \fIdestinationdir\fR. If no
 destination directory is given, they will be saved in the current working
 directory. If a directory is received, the directory structure of its contents
 is preserved.
-.PP
-\fBton\fR stands for Transfer Over Network.
 .
 .SH "OPTIONS"
 .IP "\fB\-4\fR, \fB\-\-ipv4\fR"
@@ -47,12 +45,15 @@ same port number. The default is 51205.
 .IP "\fB\-h\fR, \fB\-\-help\fR"
 Show help and exit.
 .IP "\fB\-\-hide\-passphrase\fR"
-If we are prompting for a passphrase, don't echo the passphrase as it is typed.
+If we prompt for a passphrase, don't echo the passphrase as it is typed.
 .IP "\fB\-\-include\-global\fR"
 Send announcements from global as well as private IP addresses.
+.IP "\fB\-\-listen\-port\fR \fIport\fR"
+The TCP port we invite the pusher to connect to in our announcement.
+To choose an arbitrary unused port, specify 0. The default is 51205.
 .IP "\fB\-\-max\-announcements\fR \fIn\fR"
 If no connection has been established after we've sent \fIn\fR rounds of
-announcements, give up and fail. the default is 0, which means there is no
+announcements, give up and fail. The default is 0, which means there is no
 maximum and we continue until we succeed or get interrupted.
 .IP "\fB\-\-multicast\fR"
 Only send multicast announcement packets, not broadcast. By default we send
@@ -60,14 +61,16 @@ both.
 .IP "\fB\-\-multicast-address-ipv4\fR \fIaddress\fR" 
 Specify the IPv4 multicast group address to which to send announcement packets.
 The \fBton push\fR process must use the same address. The default is
-239.199.77.5.
+239.199.77.5, which is for use on private networks.
 .IP "\fB\-\-multicast-address-ipv6\fR \fIaddress\fR"
 Specify the IPv6 multicast group address to which to send announcement packets.
 The \fBton push\fR process must use the same address. The default is
-ff08:5206:dd93:4290:0891:d264:1444:bd21.
+The default is ff08:5206:dd93:4290:0891:d264:1444:bd21, which is a private
+multicast address with organization-local scope.
 .IP "\fB\-\-multicast\-ttl\fR \fIn\fR"
-Set the TTL or hop-limit value on multicast packets to \fIn\fR. The default is
-1 for IPv4 multicast and the route's default for IPv6 multicast.
+Set the TTL or hop-limit value on multicast packets. The default is the OS
+default, which on Linux is is 1 for IPv4 multicast and the route's default
+for IPv6 multicast.
 .IP "\fB\-o\fR \fIdir\fR"
 Specify the destination (or "output") directory for received files. The
 \fB\-o\fR isn't strictly required - supplying \fIdir\fR as a positional
@@ -75,14 +78,15 @@ argument is equivalent. \fIdir\fR will be created if it does not exist.
 If we receive a directory, it will be created inside this directory.
 The default is the current directory (".").
 As a special case, if \fIdir\fR is \fB\-\fR we write all received files
-to stdout, so \fB\-o \-\fR is equivalent to \fB\-\-output\-file \-\fR.
+to stdandard output, so \fB\-o \-\fR is equivalent to
+\fB\-\-output\-file \-\fR.
 .IP "\fB\-\-output\-file\fR \fIfile\fR"
 Do not save files to any destination directory, but concatenate the contents of
 all received files and write them to \fIfile\fR. Any received directories are
 ignored and directory structure is not preserved.
 If \fIfile\fR is \fB\-\fR, the contents of all received files are written to
 standard output.
-This is intended for when we're only receiving one file, or you want all the
+This is intended for when you're only receiving one file, or you want all the
 files to be concatenated in an arbitrary order. If the pushing side sends more
 than one file, separating them out into the original files is your problem.
 .IP "\fB\-\-passphrase\fR \fIstring\fR"
@@ -96,21 +100,25 @@ Show extra diagnostic output, including details of announcement packets sent
 and any incoming connections received as a result.
 .
 .SH "EXAMPLES"
-.IP "To receive files into the current directory"
+.PP
+All these examples assume there's someone on the network running \fBton push\fR
+with the same passphrase as us.
+.
+.IP "Receive files into the current directory:"
 .nf
 $ \fBton pull\fR
 .fi
-.IP "To receive files into a named directory"
+.IP "Receive files into a named directory:"
 .nf
-$ \fBton pull /home/joe/junkfromfred\fR
+$ \fBton pull /home/joe/junkfromfred/\fR
 .fi
-.IP "To specify a passphrase on the command line rather than a prompt"
+.IP "Specify a passphrase on the command line rather than a prompt:"
 .nf
 $ \fBton pull --passphrase "hovercraft full of eels"\fR
 .fi
-.IP "To write received files to stdout, without progress updates"
+.IP "Write received files to stdout, without progress updates:"
 .nf
 $ \fBton pull -q -\fR
 .fi
 .SH "SEE ALSO"
-\fBton-push\fR(1)
+\fBton\fR(1), \fBton-push\fR(1)

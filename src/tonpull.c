@@ -84,6 +84,8 @@ print_help(FILE *f) {
 "    --hide-passphrase        Don't show passphrase as you type at the prompt\n"
 "    --include-global         Send announcements from global as well as\n"
 "                               private addresses\n"
+"    --listen-port <port>     Specify port to invite ton push to connect to\n"
+"                               (0 = arbitrary port, default %d)\n"
 "    --max-announcements <n>  Give up after <n> discovery announcements\n"
 "                               (default 0, continue indefinitely)\n"
 "    --multicast              Only announce to multicast addresses, not broadcast\n"
@@ -101,7 +103,8 @@ print_help(FILE *f) {
 "    -q, --quiet              Don't show progress updates\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
-        TON_DEFAULT_DISCOVER_PORT, TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
+        TON_DEFAULT_DISCOVER_PORT, TON_DEFAULT_LISTEN_PORT,
+	TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
 }
 
 static void
