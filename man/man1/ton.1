@@ -1,0 +1,89 @@
+.TH "TON" "1" "2022-09-26" "ton" "ton - Transfer Over Network"
+.
+.SH "NAME"
+ton \- zero-configuration intranet file transfer program
+.
+.SH "SYNOPSIS"
+.nf
+\fBton push\fR [\fIoptions\fR] \fIpath\fR ...
+\fBton pull\fR [\fIoptions\fR] \fIdestinationdir\fR
+.fi
+.
+.SH "DESCRIPTION"
+.PP
+\fBton\fR is a program to transfer a file or set of files from one computer
+to another on the same network. The transfer is secured and authenticated
+with a shared passphrase. No addresses or hostnames need to be specified;
+provided and are on the same network.
+.PP
+Details of command-line options for \fBton push\fR and \fBton pull\fR can be
+found in their respective man pages \fIton-push\fR and \fIton-pull\fR.
+.
+.SH "USAGE"
+.PP
+Generally, a \fBton\fR file transfer is done like this:
+.IP 1. 4
+Run \fBton push\fR \fIfilename\fR on the sending machine. It will generate a
+passphrase, tell you what it is, and start listening for announcements from
+\fBton pull\fR.
+.IP 2. 4
+Run \fBton pull\fR on the receiving machine, or \fBton pull\fR \fIdestdir\fR
+if you want the received files to go somewhere other than the current working
+directory. It will prompt for a passphrase - enter the same passphrase as
+on the sending machine.
+.IP 3. 4
+The two \fBton\fR processes will find each other on the network, authenticate
+to each other with the passphrase, and transfer the file from the sending
+machine to the receiving machine.
+.IP 4. 4
+If you get the passphrase wrong, or the two machines can't see each other on
+the network, or communication is blocked by a firewall, it will look like
+nothing is happening and \fBton pull\fR will complain every 10 seconds or so.
+Run both sides with \fB\-v\fR for extra diagnostic output.
+.
+.SH "HOW IT WORKS"
+.SS "Summary"
+.PP
+In summary, the pulling side announces its presence to the pushing side using
+UDP multicast and broadcast, and the pushing side receives these packets,
+"discovering" the other end of the desired transfer. The pushing side then
+uses this information to connect to a port opened on the pulling side and
+sends the metadata and content of the file or files.
+.
+.SS "Announcement"
+.PP
+\fBton pull\fR opens a TCP port to listen for incoming connections, and sends
+UDP packets announcing itself to the network. These are sent to a specific
+private-address-range multicast address, and on the network's broadcast
+address, on both IPv4 and IPv6.
+.PP
+Each announcement packet is encrypted with the shared passphrase, contains
+in its payload the TCP port number on which \fBton pull\fR is listening for
+incoming connections.
+.PP
+The hope is that at least one of these announcement packets will be received
+by \fBton push\fR.
+.
+.SS "Discovery"
+.PP
+When \fBton push\fR receives a UDP announcement packet on the expected port
+number, it attempts to decrypt it with the passphrase it has. If this results
+in a valid decryption, \fBton push\fR attempts to make a TCP connection to
+the port number named in the UDP announcement packet, then complete a TLS
+handshake using the passphrase as the pre-shared key.
+.PP
+If further valid announcement packets are received from different addresses,
+\fBton push\fR tries to connect to each one. The first connection to be
+established and complete a TLS handshake is the winner and all other pending
+connections are closed.
+.
+.SS "Transfer"
+Once there is an established TCP connection between the pushing and pulling
+side, the pushing side sends the file or files to the pulling side, which
+saves them to a local directory.
+.
+.SH "AUTHOR"
+\fBton\fR is written and maintained by Graeme Cole <graeme@greem.co.uk>.
+.
+.SH "SEE ALSO"
+\fBton-push\fR(1) \fBton-pull\fR(1)

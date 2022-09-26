@@ -96,28 +96,6 @@ Show extra diagnostic output, including details of announcement packets sent
 and any incoming connections received as a result.
 .
 .SH "EXAMPLES"
-.PP
-In general, a \fBton\fR file transfer goes like this:
-.IP 1. 4
-Run \fBton push\fR \fIfilename\fR on the sending machine. It will generate a
-passphrase, tell you what it is, and start listening for announcements from
-\fBton pull\fR.
-.IP 2. 4
-Run \fBton pull\fR on the receiving machine, or \fBton pull\fR \fIdestdir\fR
-if you want the received files to go somewhere other than the current working
-directory. It will prompt for a passphrase - enter the same passphrase as
-on the sending machine.
-.IP 3. 4
-The two \fBton\fR processes will find each other on the network, authenticate
-to each other with the passphrase, and transfer the file from the sending
-machine to the receiving machine.
-.IP 4. 4
-If you get the passphrase wrong, or the two machines can't see each other on
-the network, or communication is blocked by a firewall, it will look like
-nothing is happening and \fBton pull\fR will complain every 10 seconds or so.
-Run both sides with \fB\-v\fR for extra diagnostic output.
-.PP
-Specific command line examples for \fBton pull\fR are as follows.
 .IP "To receive files into the current directory"
 .nf
 $ \fBton pull\fR
