@@ -4,6 +4,7 @@ CUNIT=${TON_CUNIT}
 CC=gcc
 CFLAGS=-Wall -g -DUNIX=1 -std=gnu99 -Wpedantic
 LDFLAGS=-lcrypto -lssl
+INSTALL_DEST_DIR=/usr/local/bin
 
 ifeq ($(CUNIT),1)
 	CFLAGS := $(CFLAGS) -DTON_UNIT_TESTS
@@ -18,6 +19,11 @@ ton: $(TON_C_FILES) $(TON_H_FILES) wordlist/generatedwordlist.c
 
 wordlist/generatedwordlist.c: wordlist/makewordlist.py src/wordlist.h wordlist/wordlist.txt
 	python3 wordlist/makewordlist.py wordlist/wordlist.txt > wordlist/generatedwordlist.c
+
+.PHONY: clean install
+
+install: ton
+	cp ./ton $(INSTALL_DEST_DIR)/
 
 clean:
 	rm -f ton wordlist/generatedwordlist.c src/*.o
