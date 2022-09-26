@@ -94,11 +94,11 @@ print_help(FILE *f) {
 "                             Announce to IPv6 multicast address <a> (default\n"
 "                               %s)\n"
 "    --multicast-ttl <n>      Set multicast TTL to <n> (default 1)\n"
-"    -q, --quiet              Don't show progress updates\n"
 "    -o <dir>                 Another way to set the destination directory.\n"
 "                               -o - is equivalent to --output-file -\n"
 "    --output-file <file>     Concatenate all received files to one output file\n"
 "    --passphrase <str>       Specify passphrase (default: prompt)\n"
+"    -q, --quiet              Don't show progress updates\n"
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
         TON_DEFAULT_DISCOVER_PORT, TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);

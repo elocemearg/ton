@@ -1,0 +1,138 @@
+.TH "TON-PULL" "1" "2022-09-26" "ton" "ton - Transfer Over Network"
+.
+.SH "NAME"
+ton pull \- Receive a file from someone running \fBton push\fR
+.
+.SH "SYNOPSIS"
+.nf
+\fBton pull\fR [\fIoptions\fR] [\fIdestinationdir\fR]
+.fi
+.
+.SH "DESCRIPTION"
+.PP
+Receive a file or set of files from a corresponding \fBton push\fR process on
+the same network, and write the received files to \fIdestinationdir\fR.
+.PP
+If no passphrase is specified on the command line with (\fB\-\-passphrase\fR),
+\fBton pull\fR will prompt for one. This must be the same passphrase as used by
+the \fBton push\fR process and both endpoints must be on the same network.
+Specifically, a UDP multicast packet must be able to reach one endpoint from
+the other.
+.PP
+The received file or files will be saved in \fIdestinationdir\fR. If no
+destination directory is given, they will be saved in the current working
+directory. If a directory is received, the directory structure of its contents
+is preserved.
+.PP
+\fBton\fR stands for Transfer Over Network.
+.
+.SH "OPTIONS"
+.IP "\fB\-4\fR, \fB\-\-ipv4\fR"
+Use IPv4 only, not IPv6.
+.IP "\fB\-6\fR, \fB\-\-ipv6\fR"
+Use IPv6 only, not IPv4.
+.IP "\fB\-\-announcement\-interval\fR \fIsec\fR"
+Send a round of announcement packets over UDP every \fIsec\fR seconds in an
+attempt to find our corresponding \fBton push\fR process.
+In each round, a multicast and broadcast announcement packet is sent from every
+non-public IPv4 and IPv6 network interface address we have. The default is 1
+second.
+.IP "\fB\-\-broadcast\fR"
+Only send broadcast announcement packets, not multicast. By default we send
+both.
+.IP "\fB\-\-discover\-port\fR \fIport\fR"
+Specify the discovery port number. This is the UDP port number on which we
+send our announcement packets. \fBton push\fR must be expecting them on the
+same port number. The default is 51205.
+.IP "\fB\-h\fR, \fB\-\-help\fR"
+Show help and exit.
+.IP "\fB\-\-hide\-passphrase\fR"
+If we are prompting for a passphrase, don't echo the passphrase as it is typed.
+.IP "\fB\-\-include\-global\fR"
+Send announcements from global as well as private IP addresses.
+.IP "\fB\-\-max\-announcements\fR \fIn\fR"
+If no connection has been established after we've sent \fIn\fR rounds of
+announcements, give up and fail. the default is 0, which means there is no
+maximum and we continue until we succeed or get interrupted.
+.IP "\fB\-\-multicast\fR"
+Only send multicast announcement packets, not broadcast. By default we send
+both.
+.IP "\fB\-\-multicast-address-ipv4\fR \fIaddress\fR" 
+Specify the IPv4 multicast group address to which to send announcement packets.
+The \fBton push\fR process must use the same address. The default is
+239.199.77.5.
+.IP "\fB\-\-multicast-address-ipv6\fR \fIaddress\fR"
+Specify the IPv6 multicast group address to which to send announcement packets.
+The \fBton push\fR process must use the same address. The default is
+ff08:5206:dd93:4290:0891:d264:1444:bd21.
+.IP "\fB\-\-multicast\-ttl\fR \fIn\fR"
+Set the TTL or hop-limit value on multicast packets to \fIn\fR. The default is
+1 for IPv4 multicast and the route's default for IPv6 multicast.
+.IP "\fB\-o\fR \fIdir\fR"
+Specify the destination (or "output") directory for received files. The
+\fB\-o\fR isn't strictly required - supplying \fIdir\fR as a positional
+argument is equivalent. \fIdir\fR will be created if it does not exist.
+If we receive a directory, it will be created inside this directory.
+The default is the current directory (".").
+As a special case, if \fIdir\fR is \fB\-\fR we write all received files
+to stdout, so \fB\-o \-\fR is equivalent to \fB\-\-output\-file \-\fR.
+.IP "\fB\-\-output\-file\fR \fIfile\fR"
+Do not save files to any destination directory, but concatenate the contents of
+all received files and write them to \fIfile\fR. Any received directories are
+ignored and directory structure is not preserved.
+If \fIfile\fR is \fB\-\fR, the contents of all received files are written to
+standard output.
+This is intended for when we're only receiving one file, or you want all the
+files to be concatenated in an arbitrary order. If the pushing side sends more
+than one file, separating them out into the original files is your problem.
+.IP "\fB\-\-passphrase\fR \fIstring\fR"
+Use this specific passphrase rather than prompting for one.
+Conventionally a passphrase is multiple words, but it may be any arbitrary
+byte string.
+.IP "\fB\-q\fR, \fB\-\-quiet\fR"
+Don't show the progress indicator or any non-essential commentary.
+.IP "\fB\-v\fR, \fB\-\-verbose\fR"
+Show extra diagnostic output, including details of announcement packets sent
+and any incoming connections received as a result.
+.
+.SH "EXAMPLES"
+.PP
+In general, a \fBton\fR file transfer goes like this:
+.IP 1. 4
+Run \fBton push\fR \fIfilename\fR on the sending machine. It will generate a
+passphrase, tell you what it is, and start listening for announcements from
+\fBton pull\fR.
+.IP 2. 4
+Run \fBton pull\fR on the receiving machine, or \fBton pull\fR \fIdestdir\fR
+if you want the received files to go somewhere other than the current working
+directory. It will prompt for a passphrase - enter the same passphrase as
+on the sending machine.
+.IP 3. 4
+The two \fBton\fR processes will find each other on the network, authenticate
+to each other with the passphrase, and transfer the file from the sending
+machine to the receiving machine.
+.IP 4. 4
+If you get the passphrase wrong, or the two machines can't see each other on
+the network, or communication is blocked by a firewall, it will look like
+nothing is happening and \fBton pull\fR will complain every 10 seconds or so.
+Run both sides with \fB\-v\fR for extra diagnostic output.
+.PP
+Specific command line examples for \fBton pull\fR are as follows.
+.IP "To receive files into the current directory"
+.nf
+$ \fBton pull\fR
+.fi
+.IP "To receive files into a named directory"
+.nf
+$ \fBton pull /home/joe/junkfromfred\fR
+.fi
+.IP "To specify a passphrase on the command line rather than a prompt"
+.nf
+$ \fBton pull --passphrase "hovercraft full of eels"\fR
+.fi
+.IP "To write received files to stdout, without progress updates"
+.nf
+$ \fBton pull -q -\fR
+.fi
+.SH "SEE ALSO"
+\fBton-push\fR(1)

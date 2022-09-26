@@ -2,3 +2,4 @@ wordlist/generatedwordlist.c
 ton
 ton.exe
 *.o
+*.swp

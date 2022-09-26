@@ -1,0 +1,118 @@
+.TH "TON-PUSH" "1" "2022-09-26" "ton" "ton - Transfer Over Network"
+.
+.SH "NAME"
+ton push \- Send a file over the network to someone running \fBton pull\fR
+.
+.SH "SYNOPSIS"
+.nf
+\fBton push\fR [\fIoptions\fR] \fIpath\fR ...
+.fi
+.
+.SH "DESCRIPTION"
+.PP
+Listen for the presence of a corresponding \fBton pull\fR process on the
+network, then send the given file or files to it.
+.PP
+By default, \fBton push\fR will generate a random passphrase and print it to
+standard error, and the user running \fBton pull\fR is expected to type in that
+passphrase when prompted. Both endpoints must be on the same network
+(specifically, the pushing side must be able to receive private-addres-range
+UDP multicast packets from the pulling side and the pushing side must be able
+to make a TCP connection to the pulling side), and they must be using the same
+passphrase.
+.PP
+The supplied pathnames may consist of files or directories. All these files and
+directories will be created and written to in \fBton pull\fR's destination
+directory. In the case of directories, the directory and all its contents are
+sent. Symlinks, device files and socket files are ignored. File permission bits
+are preserved where possible, but some systems do not support all the Unix file
+permissions.
+.PP
+\fBton\fR stands for Transfer Over Network.
+.
+.SH "OPTIONS"
+.IP "\fB\-4\fR, \fB\-\-ipv4\fR"
+Use IPv4 only, not IPv6.
+.IP "\fB\-6\fR, \fB\-\-ipv6\fR"
+Use IPv6 only, not IPv4.
+.IP "\fB\-\-discover\-port\fR \fIport\fR"
+Specify the discovery port number. This is the UDP port number on which we
+expect to receive announcement packets from \fBton pull\fR, which must be
+using the same port number. The default is 51205.
+.IP "\fB\-h\fR, \fB\-\-help\fR"
+Show help and exit.
+.IP "\fB\-\-hide\-passphrase\fR"
+If we are prompting for a passphrase (see \fB\-\-prompt\-passphrase\fR), don't
+echo the passphrase as it is typed.
+.IP "\fB\-\-include\-global\fR"
+Listen for announcements on global as well as private IP addresses.
+.IP "\fB\-\-multicast-address-ipv4\fR \fIaddress\fR" 
+Specify the IPv4 multicast group address on which we expect to receive
+announcement packets. The \fBton pull\fR process must use the same address.
+The default is 239.199.77.5.
+.IP "\fB\-\-multicast-address-ipv6\fR \fIaddress\fR"
+Specify the IPv6 multicast group address on which we expect to receive
+announcement packets. The \fBton pull\fR process must use the same address.
+The default is ff08:5206:dd93:4290:0891:d264:1444:bd21.
+.IP "\fB\-\-passphrase\fR \fIstring\fR"
+Use this specific passphrase rather than generating or prompting for one.
+Conventionally a passphrase is multiple words, but it may be any arbitrary
+byte string.
+.IP "\fB\-\-prompt\-passphrase\fR"
+Don't generate a random passphrase, but prompt for one at the terminal.
+.IP "\fB\-\-send\-full\-metadata\fR"
+Before sending all the files, send a full list of all the files to be
+transferred. This gives the receiving side an opportunity to review the list
+and cancel the transfer if desired. That functionality isn't yet implemented
+in \fBton pull\fR so this option is not enabled by default.
+.IP "\fB\-t\fR, \fB\-\-timeout\fR \fIsec\fR"
+Time out if no connection is established after \fIsec\fR seconds. The default
+is 0, which disables the timeout.
+.IP "\fB\-w\fR, \fB\-\-words\fR \fIcount\fR"
+Generate a passphrase with \fIcount\fR words, if we're generating a passphrase.
+The default is 4.
+.IP "\fB\-v\fR, \fB\-\-verbose\fR"
+Show extra diagnostic output, including details of announcement packets
+received and where we're trying to connect to as a result.
+.
+.SH "EXAMPLES"
+.PP
+In general, a \fBton\fR file transfer goes like this:
+.IP 1. 4
+Run \fBton push\fR \fIfilename\fR on the sending machine. It will generate a
+passphrase, tell you what it is, and start listening for announcements from
+\fBton pull\fR.
+.IP 2. 4
+Run \fBton pull\fR on the receiving machine, or \fBton pull\fR \fIdestdir\fR
+if you want the received files to go somewhere other than the current working
+directory. It will prompt for a passphrase - enter the same passphrase as
+on the sending machine.
+.IP 3. 4
+The two \fBton\fR processes will find each other on the network, authenticate
+to each other with the passphrase, and transfer the file from the sending
+machine to the receiving machine.
+.IP 4. 4
+If you get the passphrase wrong, or the two machines can't see each other on
+the network, or communication is blocked by a firewall, it will look like
+nothing is happening and \fBton pull\fR will complain every 10 seconds or so.
+Run both sides with \fB\-v\fR for extra diagnostic output.
+.PP
+Specific command line examples for \fBton push\fR are as follows.
+.IP "To send a single file"
+.nf
+$ \fBton push rickroll.mp3\fR
+.fi
+.IP "To send multiple files"
+.nf
+$ \fBton push rickroll.mp3 ./Pictures/cat.jpg\fR
+.fi
+.IP "To send a directory and everything in it"
+.nf
+$ \fBton push ./Pictures/\fR
+.fi
+.IP "To send a file, not use IPv6, and supply your own passphrase"
+.nf
+$ \fBton push -4 --passphrase "hovercraft full of eels" ./cat.jpg\fR
+.fi
+.SH "SEE ALSO"
+\fBton-pull\fR(1)
