@@ -832,6 +832,7 @@ ton_receive_reply_report_error(struct ton_session *sess) {
                     decoded.tag == TON_MSG_FATAL_ERROR ? "fatal " : "",
                     decoded.u.err.code, decoded.u.err.message);
             rc = (decoded.tag == TON_MSG_ERROR ? TON_ERR_REMOTE_ERROR : TON_ERR_REMOTE_FATAL_ERROR);
+	    break;
         default:
             ton_error(0, 0, "received unexpected reply tag %d, expecting OK, ERROR or FATAL ERROR", decoded.tag);
             rc = TON_ERR_PROTOCOL;
