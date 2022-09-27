@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <errno.h>
+#include <unistd.h>
+#include <ctype.h>
 
 #include "encryption.h"
 #include "utils.h"
@@ -18,6 +20,7 @@ enum main_pull_longopts {
     PULL_BROADCAST,
     PULL_CONFIRM_FILE_SET,
     PULL_DISCOVER_PORT,
+    PULL_FORCE,
     PULL_HIDE_PASSPHRASE,
     PULL_INCLUDE_GLOBAL,
     PULL_IPV4,
@@ -36,8 +39,9 @@ enum main_pull_longopts {
 static const struct option longopts[] = {
     { "announcement-interval", 1, NULL, PULL_ANNOUNCEMENT_INTERVAL },
     { "broadcast", 0, NULL, PULL_BROADCAST },
-    { "confirm", 0, NULL, PULL_CONFIRM_FILE_SET },
+    { "confirm-transfer", 0, NULL, PULL_CONFIRM_FILE_SET },
     { "discover-port", 1, NULL, PULL_DISCOVER_PORT },
+    { "force", 0, NULL, PULL_FORCE },
     { "help", 0, NULL, 'h' },
     { "hide-passphrase", 0, NULL, PULL_HIDE_PASSPHRASE },
     { "include-global", 0, NULL, PULL_INCLUDE_GLOBAL },
@@ -58,6 +62,12 @@ static const struct option longopts[] = {
     { NULL, 0, NULL, 0 }
 };
 
+struct ton_ft_cookie {
+    bool replace_accept_all;
+    bool replace_reject_all;
+    struct ton_session *sess;
+};
+
 static void
 print_help(FILE *f) {
     fprintf(f,
@@ -76,8 +86,10 @@ print_help(FILE *f) {
 "    --announcement-interval <sec>\n"
 "                             Discovery announcement interval (sec) (default 1.0)\n"
 "    --broadcast              Only announce to broadcast addresses, not multicast\n"
+"    --confirm-transfer       Confirm before starting transfer of file set\n"
 "    --discover-port <port>   Specify discovery UDP port number (default %d,\n"
 "                               pusher must use the same)\n"
+"    -f, --force              Don't ask before replacing existing files\n"
 "    -h, --help               Show this help\n"
 "    --hide-passphrase        Don't show passphrase as you type at the prompt\n"
 "    --include-global         Send announcements from global as well as\n"
@@ -102,7 +114,7 @@ print_help(FILE *f) {
 "    -v, --verbose            Show extra diagnostic output\n"
 ,
         TON_DEFAULT_DISCOVER_PORT, TON_DEFAULT_LISTEN_PORT,
-	TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
+        TON_MULTICAST_GROUP_IPV4, TON_MULTICAST_GROUP_IPV6);
 }
 
 static void
@@ -124,17 +136,116 @@ file_mode_to_string(int mode, char *dest) {
     dest[pos] = '\0';
 }
 
+static char
+prompt_char_choice(const char *prompt, const char *answers, char def) {
+    int answer = 0;
+    int c;
+    do {
+        fprintf(stderr, "%s", prompt);
+        answer = fgetc(stdin);
+        if (answer == '\n' || answer == EOF) {
+            answer = def;
+        }
+        else {
+            answer = tolower(answer);
+            /* read and discard to the end of the input line */
+            while ((c = fgetc(stdin)) != '\n' && c != EOF);
+        }
+        if (answer != EOF && strchr(answers, (char) answer) == NULL)
+            answer = 0;
+    } while (!answer);
+    return (char) answer;
+}
+
+static int
+check_file(void *cookie, const struct ton_file *file, const TON_LF_CHAR *local_filename) {
+    struct ton_ft_cookie *ft_cookie = (struct ton_ft_cookie *) cookie;
+    TON_STAT st;
+    int stat_rc = -1;
+    bool file_exists = false;
+
+    if (ton_access(local_filename, F_OK) == 0) {
+        stat_rc = ton_stat(local_filename, &st);
+        file_exists = true;
+    }
+    if (file_exists) {
+        /* We're receiving a file we already have, so decide what to do */
+        if (ft_cookie->replace_accept_all) {
+            return TON_FT_ACCEPT;
+        }
+        else if (ft_cookie->replace_reject_all) {
+            return TON_FT_SKIP;
+        }
+        else {
+            /* Ask the user what they want to do with this file */
+            char answer;
+            char timestamp_str[60];
+            char size_str[20];
+            struct tm tm;
+            const TON_LF_CHAR *local_basename;
+
+            if (stat_rc == 0) {
+                localtime_r(&st.st_mtime, &tm);
+                strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S %Z", &tm);
+                ton_size_to_str(st.st_size, size_str);
+            }
+            else {
+                strncpy(timestamp_str, "unknown timestamp", sizeof(timestamp_str));
+                strncpy(size_str, "unknown size", sizeof(size_str));
+            }
+
+            local_basename = ton_lf_basename(local_filename);
+
+            fprintf(stderr, "\nLocal file " TON_LF_PRINTF " already exists.\n", local_filename);
+            fprintf(stderr, "  Do you want to replace the existing file:\n");
+            fprintf(stderr, "      %s  %s  " TON_LF_PRINTF "\n", timestamp_str, size_str, local_basename);
+
+            localtime_r(&file->mtime, &tm);
+            strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S %Z", &tm);
+            ton_size_to_str(file->size, size_str);
+
+            fprintf(stderr, "  with this one?\n");
+            fprintf(stderr, "      %s  %s  " TON_LF_PRINTF "\n", timestamp_str, size_str, local_basename);
+            answer = prompt_char_choice(
+                    "  [y] Replace the existing file with the received file.\n"
+                    "  [n] Keep the existing file.\n"
+                    "  [a] Replace this and all existing files from now on.\n"
+                    "  [k] Keep all existing files from now on.\n"
+                    "  [q] Quit the file transfer.\n"
+                    "  y/n/a/k/q [y]? ",
+                    "ynakq", 'y');
+            switch (answer) {
+                case 'a':
+                    ft_cookie->replace_accept_all = true;
+                case 'y':
+                default:
+                    return TON_FT_ACCEPT;
+                case 'k':
+                    ft_cookie->replace_reject_all = true;
+                case 'n':
+                    return TON_FT_SKIP;
+                case 'q':
+                    return TON_FT_ABORT;
+            }
+        }
+    }
+    else {
+        /* File doesn't already exist, so accept it */
+        return TON_FT_ACCEPT;
+    }
+}
+
 static int
 request_to_send(void *cookie, const struct ton_file *files, long file_count,
         long long total_size) {
-    struct ton_session *sess = (struct ton_session *) cookie;
+    struct ton_ft_cookie *ft_cookie = (struct ton_ft_cookie *) cookie;
     FILE *f = stderr;
     char size_str[12];
     char line[10];
     char addr[100];
     char port[20];
 
-    if (ton_session_get_peer_addr(sess, addr, sizeof(addr), port, sizeof(port)) < 0) {
+    if (ton_session_get_peer_addr(ft_cookie->sess, addr, sizeof(addr), port, sizeof(port)) < 0) {
         strcpy(addr, "(unknown)");
         strcpy(port, "(unknown)");
     }
@@ -201,20 +312,21 @@ main_pull(int argc, char **argv) {
     char *passphrase = NULL;
     char *multicast_address_ipv4 = NULL, *multicast_address_ipv6 = NULL;
     struct ton_session sess;
-    bool sess_valid = 0;
+    bool sess_valid = false;
     int exit_status = 0;
     char *output_dir = NULL;
-    bool confirm_file_set = 0;
+    bool confirm_file_set = false;
     char peer_addr[256] = "";
     char peer_port[20] = "";
     int address_families = 0;
     int announce_types = 0;
-    bool include_global = 0;
-    bool hide_passphrase = 0;
+    bool include_global = false;
+    bool hide_passphrase = false;
     char *output_filename = NULL;
+    bool confirm_replace = true;
     struct ton_discover_options opts;
 
-    while ((c = getopt_long(argc, argv, "ho:qv46", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "fho:qv46", longopts, NULL)) != -1) {
         switch (c) {
             case PULL_MAX_ANNOUNCEMENTS:
                 max_announcements = atoi(optarg);
@@ -271,6 +383,11 @@ main_pull(int argc, char **argv) {
 
             case PULL_CONFIRM_FILE_SET:
                 confirm_file_set = true;
+                break;
+
+            case 'f':
+            case PULL_FORCE:
+                confirm_replace = false;
                 break;
 
             case '4':
@@ -391,7 +508,6 @@ main_pull(int argc, char **argv) {
     ton_discover_set_verbose(&opts, verbose);
     ton_discover_set_include_global_addresses(&opts, include_global);
     ton_discover_set_listen_port(&opts, listen_port);
-
     if (!quiet) {
         ton_discover_set_sent_announcement_callback(&opts, sent_announcement, NULL);
     }
@@ -409,6 +525,11 @@ main_pull(int argc, char **argv) {
     if (sess_valid) {
         struct ton_file_transfer ctx;
         FILE *output_file = NULL;
+        struct ton_ft_cookie cookie;
+
+        cookie.replace_accept_all = !confirm_replace;
+        cookie.replace_reject_all = false;
+        cookie.sess = &sess;
 
         if (!quiet) {
             /* Tell the user we successfully found the other endpoint */
@@ -423,8 +544,12 @@ main_pull(int argc, char **argv) {
         /* Set up the file transfer session as receiver... */
         ton_file_transfer_init_receiver(&ctx, output_dir);
         if (confirm_file_set) {
-            ton_file_transfer_set_callback_cookie(&ctx, &sess);
+            ton_file_transfer_set_callback_cookie(&ctx, &cookie);
             ton_file_transfer_set_request_to_send_callback(&ctx, request_to_send);
+        }
+        if (confirm_replace) {
+                ton_file_transfer_set_callback_cookie(&ctx, &cookie);
+            ton_file_transfer_set_file_start_callback(&ctx, check_file);
         }
 
         /* If we're writing all received files to a single output file, open

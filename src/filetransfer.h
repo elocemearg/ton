@@ -6,6 +6,11 @@
 #include "session.h"
 #include "localfs.h"
 
+/* Valid return values from a ton_ft_confirm_file_cb callback */
+#define TON_FT_ACCEPT 0
+#define TON_FT_SKIP 1
+#define TON_FT_ABORT (-1)
+
 struct ton_file {
     /* Source or destination path to the file on our system. */
     TON_LF_CHAR *local_path;
@@ -39,6 +44,9 @@ struct ton_file_list {
 typedef int (*ton_ft_request_to_send_cb)(void *callback_cookie,
         const struct ton_file *file_list, long file_count,
         long long total_size);
+
+typedef int (*ton_ft_confirm_file_cb)(void *callback_cookie,
+        const struct ton_file *received_file, const TON_LF_CHAR *local_path);
 
 typedef void (*ton_ft_progress_cb)(void *callback_cookie, int is_sender,
             const TON_LF_CHAR *filename, long file_number,
@@ -93,6 +101,13 @@ struct ton_file_transfer {
      * Return -1 to reject the files.
      */
     ton_ft_request_to_send_cb request_to_send;
+
+    /* If confirm_file is not NULL, then we call it after receiving the
+     * metadata but before receiving the file's data. If the callback returns
+     * TON_FT_ACCEPT then we accept the file. If the callback returns
+     * TON_FT_SKIP then we skip the file but continue with the transfer. If
+     * the callback returns TON_FT_ABORT then we abort the transfer. */
+    ton_ft_confirm_file_cb confirm_file;
 
     /* Called during ton_file_transfer_session() periodically while sending or
      * receiving files, to provide an update on progress.
@@ -170,6 +185,15 @@ ton_file_transfer_set_callback_cookie(struct ton_file_transfer *ctx, void *cooki
  * to cancel the transfer. */
 void
 ton_file_transfer_set_request_to_send_callback(struct ton_file_transfer *ctx, ton_ft_request_to_send_cb cb);
+
+/* Set the callback function to be called immediately before we receive a
+ * file's data. The callback function can return TON_FT_ACCEPT to accept the
+ * file, TON_FT_SKIP to receive but ignore the file, or TON_FT_ABORT to abort
+ * the whole transfer.
+ * If the callback is not set, all files are accepted. */
+void
+ton_file_transfer_set_file_start_callback(struct ton_file_transfer *ctx,
+        ton_ft_confirm_file_cb cb);
 
 /* Set the callback function to be called periodically during the transfer to
  * update the user on prgoress. */

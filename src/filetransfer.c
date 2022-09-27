@@ -1362,27 +1362,27 @@ default_progress_callback(void *callback_cookie, int is_sender,
 static int
 ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
         struct ton_file_list *list, long long file_count, long long total_size,
-        long long *receiver_skipped_count, long long *sender_failed_file_count) {
+        long long *receiver_skipped_error_count,
+        long long *receiver_skipped_user_count,
+        long long *sender_failed_file_count) {
     struct ton_msg *msg = NULL;
     struct ton_decoded_msg decoded;
     FILE *current_file = NULL; /* destination for current file */
-    TON_LF_CHAR *local_filename = NULL; /* name of current or last file received */
     bool in_file_transfer = false; /* are we between FILE_METADATA and DATA_END */
-    char *ton_filename = NULL; /* filename according to FILE_METADATA */
-    time_t current_file_mtime = 0;
+    struct ton_file current_ton_file; /* current file being received */
     long long current_file_position = 0;
-    long long current_file_size = 0;
     long long total_bytes_received = 0;
     long long total_bytes_remaining = total_size;
     long long current_file_number = 0;
     long files_sender_failed = 0;
-    int current_file_mode = 0;
     int return_value = 0;
     struct timeval now, next_progress_report;
     const struct timeval progress_report_interval = { 0, 500000 };
 
     gettimeofday(&now, NULL);
     timeval_add(&now, &progress_report_interval, &next_progress_report);
+
+    memset(&current_ton_file, 0, sizeof(current_ton_file));
 
     msg = ton_msg_alloc();
     if (msg == NULL) {
@@ -1399,17 +1399,17 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
             /* Metadata message which precedes a new file */
             if (in_file_transfer) {
                 ton_error(0, 0, "TON_MSG_FILE_METADATA tag received out of sequence!");
-                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_METADATA tag but didn't end previous file %s", ton_filename);
+                ton_send_fatal_error(sess, TON_ERR_PROTOCOL, "sender sent TON_MSG_FILE_METADATA tag but didn't end previous file %s", current_ton_file.ton_path);
                 goto fail;
             }
 
             /* Copy the details about the current file so we have them for
              * progress reports and so we can set the file's mode and
              * timestamp after we close it. */
-            current_file_mtime = decoded.u.metadata.mtime;
-            current_file_mode = decoded.u.metadata.mode;
-            current_file_size = decoded.u.metadata.size;
             current_file_position = 0;
+            current_ton_file.mtime = decoded.u.metadata.mtime;
+            current_ton_file.mode = decoded.u.metadata.mode;
+            current_ton_file.size = decoded.u.metadata.size;
             current_file_number++;
 
             /* We are now in a file transfer, which means we can only receive
@@ -1417,71 +1417,95 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
              * TON_MSG_FATAL_ERROR until the transfer is finished. */
             in_file_transfer = true;
 
-            /* Replace ton_filename and local_filename with the details of the
-             * new file - this is now our current file. */
-            free(ton_filename);
-            ton_filename = strdup(decoded.u.metadata.name);
-            free(local_filename);
-            local_filename = ton_path_to_local_path(decoded.u.metadata.name, ctx->output_dir);
-            if (local_filename == NULL) {
+            /* Replace the strings in current_ton_file with the details of the
+             * new file, which is now our current file. */
+            free(current_ton_file.ton_path);
+            current_ton_file.ton_path = strdup(decoded.u.metadata.name);
+            free(current_ton_file.local_path);
+            current_ton_file.local_path = ton_path_to_local_path(decoded.u.metadata.name, ctx->output_dir);
+            if (current_ton_file.local_path == NULL) {
                 ton_error(0, errno, "failed to allocate path name");
                 goto fail;
             }
+            current_ton_file.next = NULL;
 
             if (ctx->output_file != NULL) {
                 /* Don't create a new file - we're writing everything to
                  * one output file. */
                 current_file = ctx->output_file;
             }
-            else if (S_ISREG(current_file_mode)) {
+            else if (S_ISREG(current_ton_file.mode)) {
+                bool skip_file = false;
+
                 /* This is a regular file. */
 
                 /* Create the containing directory if it isn't already there */
-                if (ton_mkdir_parents(local_filename, 0777, true) < 0) {
+                if (ton_mkdir_parents(current_ton_file.local_path, 0777, true) < 0) {
                     int err = errno;
-                    ton_error(0, err, "failed to create directory for " TON_LF_PRINTF, local_filename);
-                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for " TON_LF_PRINTF ": %s", local_filename, strerror(err));
+                    ton_error(0, err, "failed to create directory for " TON_LF_PRINTF, current_ton_file.local_path);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for " TON_LF_PRINTF ": %s", current_ton_file.local_path, strerror(err));
                     goto fail;
                 }
 
-                /* Open a new file for writing. */
-                current_file = ton_fopen(local_filename, TON_LF_MODE_WB);
-                if (ton_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
-                    fclose(current_file);
-                    ton_unlink(local_filename);
-                    current_file = NULL;
-                    errno = EPERM;
+                if (ctx->confirm_file != NULL) {
+                    /* Ask the callback whether we want to save or skip this
+                     * file, or abort the whole transfer. */
+                    int answer = ctx->confirm_file(ctx->callback_cookie, &current_ton_file, current_ton_file.local_path);
+                    if (answer == TON_FT_SKIP) {
+                        skip_file = true;
+                    }
+                    else if (answer == TON_FT_ABORT) {
+                        ton_error(0, 0, "transfer aborted by user");
+                        ton_send_fatal_error(sess, TON_ERR_FILE_SET_REJECTED, "receiving user cancelled file transfer");
+                        goto fail;
+                    }
                 }
-                if (current_file == NULL) {
-                    ton_error(0, errno, "skipping " TON_LF_PRINTF ": failed to open for writing", local_filename);
-                    ++*receiver_skipped_count;
+
+                if (skip_file) {
+                    /* Receive but ignore this file, at user request. */
+                    current_file = NULL;
+                    ++*receiver_skipped_user_count;
+                }
+                else {
+                    /* Open a new file for writing. */
+                    current_file = ton_fopen(current_ton_file.local_path, TON_LF_MODE_WB);
+                    if (ton_random_file_write_failures && current_file == NULL && rand() % 50 == 0) {
+                        fclose(current_file);
+                        ton_unlink(current_ton_file.local_path);
+                        current_file = NULL;
+                        errno = EPERM;
+                    }
+                    if (current_file == NULL) {
+                        ton_error(0, errno, "skipping " TON_LF_PRINTF ": failed to open for writing", current_ton_file.local_path);
+                        ++*receiver_skipped_error_count;
+                    }
                 }
             }
 #ifndef WINDOWS
-            else if (S_ISFIFO(current_file_mode)) {
+            else if (S_ISFIFO(current_ton_file.mode)) {
                 /* Create a FIFO, creating its containing directories if necessary. */
-                if (ton_mkdir_parents(local_filename, 0777, true) < 0) {
+                if (ton_mkdir_parents(current_ton_file.local_path, 0777, true) < 0) {
                     int err = errno;
-                    ton_error(0, err, "failed to create directory for fifo " TON_LF_PRINTF, local_filename);
-                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TON_LF_PRINTF ": %s", local_filename, strerror(err));
+                    ton_error(0, err, "failed to create directory for fifo " TON_LF_PRINTF, current_ton_file.local_path);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TON_LF_PRINTF ": %s", current_ton_file.local_path, strerror(err));
                     goto fail;
                 }
-                if (mkfifo(local_filename, current_file_mode & 07777) != 0) {
-                    ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, local_filename);
-                    ++*receiver_skipped_count;
+                if (mkfifo(current_ton_file.local_path, current_ton_file.mode & 07777) != 0) {
+                    ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, current_ton_file.local_path);
+                    ++*receiver_skipped_error_count;
                 }
             }
 #endif
-            else if (S_ISDIR(current_file_mode)) {
+            else if (S_ISDIR(current_ton_file.mode)) {
                 /* This is a directory entry. It arrives *after* any files it
                  * contains, so it should already exist unless it contains no
                  * files. Create the directory if we haven't already.
                  * When we get the TON_MSG_FILE_DATA_END message, we'll set
                  * its timestamp and permissions. */
-                if (ton_access(local_filename, F_OK) != 0) {
-                    if (ton_mkdir_parents(local_filename, current_file_mode & 0777, false) < 0) {
-                        ton_error(0, errno, "failed to create directory " TON_LF_PRINTF, local_filename);
-                        ++*receiver_skipped_count;
+                if (ton_access(current_ton_file.local_path, F_OK) != 0) {
+                    if (ton_mkdir_parents(current_ton_file.local_path, current_ton_file.mode & 0777, false) < 0) {
+                        ton_error(0, errno, "failed to create directory " TON_LF_PRINTF, current_ton_file.local_path);
+                        ++*receiver_skipped_error_count;
                     }
                 }
             }
@@ -1509,8 +1533,8 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                      * Perhaps instead we could just report the error to our
                      * user and ignore the rest of the data for this file? */
                     int err = errno;
-                    ton_error(0, err, "failed to write to " TON_LF_PRINTF, local_filename);
-                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", ton_filename, strerror(err));
+                    ton_error(0, err, "failed to write to " TON_LF_PRINTF, current_ton_file.local_path);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to write data to %s: %s", current_ton_file.ton_path, strerror(err));
                     goto fail;
                 }
             }
@@ -1542,11 +1566,11 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                     /* If we fail to write out a file locally, we treat this
                      * as a fatal error and abort the session. */
                     int err = errno;
-                    ton_error(0, err, "error on close of " TON_LF_PRINTF, local_filename);
-                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", ton_filename, strerror(err));
+                    ton_error(0, err, "error on close of " TON_LF_PRINTF, current_ton_file.local_path);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to close %s: %s", current_ton_file.ton_path, strerror(err));
 
                     /* Try to delete the file */
-                    ton_unlink(local_filename);
+                    ton_unlink(current_ton_file.local_path);
                     goto fail;
                 }
                 current_file = NULL;
@@ -1559,19 +1583,19 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                      * metadata message we received before the file data. */
 #ifdef WINDOWS
                     /* utime() can't set a directory's modification time on Windows */
-                    if (!S_ISDIR(current_file_mode))
+                    if (!S_ISDIR(current_ton_file.mode))
 #endif
                     {
                         TON_UTIMBUF timbuf;
                         timbuf.actime = time(NULL);
-                        timbuf.modtime = current_file_mtime;
-                        if (ton_utime(local_filename, &timbuf) < 0) {
-                            ton_error(0, errno, "warning: failed to set modification time of " TON_LF_PRINTF, local_filename);
+                        timbuf.modtime = current_ton_file.mtime;
+                        if (ton_utime(current_ton_file.local_path, &timbuf) < 0) {
+                            ton_error(0, errno, "warning: failed to set modification time of " TON_LF_PRINTF, current_ton_file.local_path);
                         }
                     }
 
-                    if (ton_chmod(local_filename, current_file_mode & 07777) < 0) {
-                        ton_error(0, errno, "warning: failed to set mode %03o on " TON_LF_PRINTF, current_file_mode & 07777, local_filename);
+                    if (ton_chmod(current_ton_file.local_path, current_ton_file.mode & 07777) < 0) {
+                        ton_error(0, errno, "warning: failed to set mode %03o on " TON_LF_PRINTF, current_ton_file.mode & 07777, current_ton_file.local_path);
                     }
                 }
             }
@@ -1581,14 +1605,14 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                  * report and remember it, and delete any partially-transferred
                  * file. */
                 if (ctx->output_file == NULL) {
-                    ton_unlink(local_filename);
+                    ton_unlink(current_ton_file.local_path);
                 }
                 files_sender_failed++;
 
                 /* Don't expect the rest of this file */
-                if (total_bytes_remaining > 0)
-                    total_bytes_remaining -= current_file_size - current_file_position;
-                ton_error(0, 0, "warning: sender skipped " TON_LF_PRINTF ": %s", local_filename, decoded.u.err.message);
+                if (total_bytes_remaining > 0 && current_ton_file.size >= 0)
+                    total_bytes_remaining -= current_ton_file.size - current_file_position;
+                ton_error(0, 0, "warning: sender skipped " TON_LF_PRINTF ": %s", current_ton_file.local_path, decoded.u.err.message);
             }
 
             /* We're no longer inside a file transfer, so the next message
@@ -1614,23 +1638,24 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
             goto fail;
         }
         if (is_progress_report_due(ctx)) {
-            make_progress_report(ctx, 0, local_filename,
+            make_progress_report(ctx, 0, current_ton_file.local_path,
                     current_file_number, file_count, current_file_position,
-                    current_file_size, total_bytes_received,
+                    current_ton_file.size, total_bytes_received,
                     total_bytes_remaining < 0 ? -1 : total_bytes_received + total_bytes_remaining,
                     files_sender_failed, 0);
         }
     } while (decoded.tag != TON_MSG_FILE_SET_END);
 
     /* Write a final "we've finished!" progress report. */
-    make_progress_report(ctx, 0, local_filename, current_file_number,
-            file_count, current_file_position, current_file_size,
-            total_bytes_received, total_bytes_received, files_sender_failed, 1);
+    make_progress_report(ctx, 0, current_ton_file.local_path,
+            current_file_number, file_count, current_file_position,
+            current_ton_file.size, total_bytes_received, total_bytes_received,
+            files_sender_failed, 1);
 
 end:
     *sender_failed_file_count = files_sender_failed;
-    free(local_filename);
-    free(ton_filename);
+    free(current_ton_file.ton_path);
+    free(current_ton_file.local_path);
     if (current_file && current_file != ctx->output_file)
         fclose(current_file);
     ton_msg_free(msg);
@@ -1671,7 +1696,8 @@ fail:
 static int
 ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
         struct ton_session *sess, long long *file_count_out,
-        long long *receiver_skipped_file_count_out,
+        long long *receiver_skipped_error_file_count_out,
+        long long *receiver_skipped_user_file_count_out,
         long long *sender_failed_file_count_out) {
     struct ton_file_list list;
     struct ton_msg *msg = NULL;
@@ -1680,7 +1706,8 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
     int rc;
     long long file_count = -1, total_size = -1;
     long long sender_failed_file_count = 0;
-    long long receiver_skipped_file_count = 0;
+    long long receiver_skipped_error_file_count = 0;
+    long long receiver_skipped_user_file_count = 0;
     bool file_set_rejected = false;
 
     ton_file_list_init(&list);
@@ -1745,7 +1772,9 @@ ton_file_transfer_session_receiver(struct ton_file_transfer *ctx,
 
                 /* Receive files and write them to output_dir */
                 rc = ton_receive_file_set(ctx, sess, &list, file_count,
-                        total_size, &receiver_skipped_file_count, &sender_failed_file_count);
+                        total_size, &receiver_skipped_error_file_count,
+                        &receiver_skipped_user_file_count,
+                        &sender_failed_file_count);
                 if (rc < 0)
                     goto fail;
 
@@ -1771,8 +1800,10 @@ end:
         *file_count_out = file_count;
     if (sender_failed_file_count_out)
         *sender_failed_file_count_out = sender_failed_file_count;
-    if (receiver_skipped_file_count_out)
-        *receiver_skipped_file_count_out = receiver_skipped_file_count;
+    if (receiver_skipped_error_file_count_out)
+        *receiver_skipped_error_file_count_out = receiver_skipped_error_file_count;
+    if (receiver_skipped_user_file_count_out)
+        *receiver_skipped_user_file_count_out = receiver_skipped_user_file_count;
 
     ton_msg_free(msg);
     ton_file_list_destroy(&list);
@@ -1872,6 +1903,12 @@ ton_file_transfer_set_request_to_send_callback(struct ton_file_transfer *ctx, to
 }
 
 void
+ton_file_transfer_set_file_start_callback(struct ton_file_transfer *ctx,
+        ton_ft_confirm_file_cb cb) {
+    ctx->confirm_file = cb;
+}
+
+void
 ton_file_transfer_set_send_full_metadata(struct ton_file_transfer *ctx, bool value) {
     ctx->send_full_metadata = value;
 }
@@ -1897,7 +1934,7 @@ ton_file_transfer_session(struct ton_file_transfer *ctx, struct ton_session *ses
 
     while (!finished) {
         long long total_files_to_send = 0, num_files_sender_failed = 0;
-        long long num_files_receiver_skipped = 0;
+        long long num_files_receiver_skipped_by_errors = 0, num_files_receiver_skipped_by_user = 0;
         if (is_sender) {
             if (have_been_sender) {
                 /* Already been sender, so finish, don't send all the
@@ -1912,20 +1949,30 @@ ton_file_transfer_session(struct ton_file_transfer *ctx, struct ton_session *ses
         }
         else {
             rc = ton_file_transfer_session_receiver(ctx, sess,
-                    &total_files_to_send, &num_files_receiver_skipped,
+                    &total_files_to_send, &num_files_receiver_skipped_by_errors,
+                    &num_files_receiver_skipped_by_user,
                     &num_files_sender_failed);
             have_been_receiver = true;
         }
         if (rc == 0 && num_files_sender_failed > 0) {
-            ton_error(0, 0, "warning: %lld of %lld files were not sent%s",
+            ton_error(0, 0, "warning: %lld of %lld items were not sent%s",
                     num_files_sender_failed, total_files_to_send,
                     is_sender ? " to receiver" : " to us");
             failed = true;
         }
-        if (rc == 0 && num_files_receiver_skipped > 0) {
-            ton_error(0, 0, "warning: %lld of %lld files skipped due to errors. Details above.",
-                    num_files_receiver_skipped, total_files_to_send);
-            failed = true;
+        if (rc == 0 && num_files_receiver_skipped_by_errors + num_files_receiver_skipped_by_user > 0) {
+            if (num_files_receiver_skipped_by_user > 0) {
+                ton_error(0, 0, "%lld of %lld items skipped, of which %lld were skipped due to errors.",
+                        num_files_receiver_skipped_by_user + num_files_receiver_skipped_by_errors,
+                        total_files_to_send, num_files_receiver_skipped_by_errors);
+            }
+            else {
+                ton_error(0, 0, "%lld of %lld items skipped due to errors.",
+                        num_files_receiver_skipped_by_errors, total_files_to_send);
+            }
+            if (num_files_receiver_skipped_by_errors > 0) {
+                failed = true;
+            }
         }
 
         if (rc < 0) {

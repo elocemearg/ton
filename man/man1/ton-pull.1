@@ -38,13 +38,15 @@ second.
 .IP "\fB\-\-broadcast\fR"
 Only send broadcast announcement packets, not multicast. By default we send
 both.
-.IP "\fB\-\-confirm\fR"
+.IP "\fB\-\-confirm\-transfer\fR"
 Show the file count and total size of the files the pusher wants to send, and
 ask the user to confirm or cancel the transfer before proceeding.
 .IP "\fB\-\-discover\-port\fR \fIport\fR"
 Specify the discovery port number. This is the UDP port number on which we
 send our announcement packets. \fBton push\fR must be expecting them on the
 same port number. The default is 51205.
+.IP "\fB\-f\fR, \fB\-\-force\fR"
+Overwrite existing files without asking.
 .IP "\fB\-h\fR, \fB\-\-help\fR"
 Show help and exit.
 .IP "\fB\-\-hide\-passphrase\fR"

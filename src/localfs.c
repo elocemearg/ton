@@ -333,6 +333,18 @@ ton_realpath(const TON_LF_CHAR *path) {
 #endif
 }
 
+const TON_LF_CHAR *
+ton_lf_basename(const TON_LF_CHAR *path) {
+    const TON_LF_CHAR *bn = path + ton_lf_len(path);
+    while (bn > path && *bn != DIR_SEP) {
+        --bn;
+    }
+    if (*bn == DIR_SEP) {
+        ++bn;
+    }
+    return bn;
+}
+
 /* If *p points to a valid UTF-8 byte sequence, point *p to the first byte
  * after the sequence and return the character.
  * Otherwise, leave *p unchanged and return (wchar_t) -1. */
