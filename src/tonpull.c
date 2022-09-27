@@ -158,14 +158,14 @@ prompt_char_choice(const char *prompt, const char *answers, char def) {
 }
 
 static int
-check_file(void *cookie, const struct ton_file *file, const TON_LF_CHAR *local_filename) {
+check_file(void *cookie, const struct ton_file *file) {
     struct ton_ft_cookie *ft_cookie = (struct ton_ft_cookie *) cookie;
     TON_STAT st;
     int stat_rc = -1;
     bool file_exists = false;
 
-    if (ton_access(local_filename, F_OK) == 0) {
-        stat_rc = ton_stat(local_filename, &st);
+    if (ton_access(file->local_path, F_OK) == 0) {
+        stat_rc = ton_stat(file->local_path, &st);
         file_exists = true;
     }
     if (file_exists) {
@@ -194,9 +194,9 @@ check_file(void *cookie, const struct ton_file *file, const TON_LF_CHAR *local_f
                 strncpy(size_str, "unknown size", sizeof(size_str));
             }
 
-            local_basename = ton_lf_basename(local_filename);
+            local_basename = ton_lf_basename(file->local_path);
 
-            fprintf(stderr, "\nLocal file " TON_LF_PRINTF " already exists.\n", local_filename);
+            fprintf(stderr, "\nLocal file " TON_LF_PRINTF " already exists.\n", file->local_path);
             fprintf(stderr, "  Do you want to replace the existing file:\n");
             fprintf(stderr, "      %s  %s  " TON_LF_PRINTF "\n", timestamp_str, size_str, local_basename);
 

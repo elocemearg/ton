@@ -1450,7 +1450,7 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 if (ctx->confirm_file != NULL) {
                     /* Ask the callback whether we want to save or skip this
                      * file, or abort the whole transfer. */
-                    int answer = ctx->confirm_file(ctx->callback_cookie, &current_ton_file, current_ton_file.local_path);
+                    int answer = ctx->confirm_file(ctx->callback_cookie, &current_ton_file);
                     if (answer == TON_FT_SKIP) {
                         skip_file = true;
                     }

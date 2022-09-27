@@ -46,7 +46,7 @@ typedef int (*ton_ft_request_to_send_cb)(void *callback_cookie,
         long long total_size);
 
 typedef int (*ton_ft_confirm_file_cb)(void *callback_cookie,
-        const struct ton_file *received_file, const TON_LF_CHAR *local_path);
+        const struct ton_file *received_file);
 
 typedef void (*ton_ft_progress_cb)(void *callback_cookie, int is_sender,
             const TON_LF_CHAR *filename, long file_number,
