@@ -58,11 +58,12 @@ Conventionally a passphrase is multiple words, but it may be any arbitrary
 byte string.
 .IP "\fB\-\-prompt\-passphrase\fR"
 Don't generate a random passphrase, but prompt for one at the terminal.
+.IP "\fB\-q\fR, \fB\-\-quiet\fR"
+Don't show the progress indicator or non-essential commentary.
 .IP "\fB\-\-send\-full\-metadata\fR"
 Before sending all the files, send a full list of all the files to be
 transferred. This gives the receiving side an opportunity to review the list
-and cancel the transfer if desired. That functionality isn't yet implemented
-in \fBton pull\fR so this option is not enabled by default.
+and cancel the transfer if desired.
 .IP "\fB\-t\fR, \fB\-\-timeout\fR \fIsec\fR"
 Time out if no connection is established after \fIsec\fR seconds. The default
 is 0, which disables the timeout.

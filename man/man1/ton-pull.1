@@ -38,6 +38,9 @@ second.
 .IP "\fB\-\-broadcast\fR"
 Only send broadcast announcement packets, not multicast. By default we send
 both.
+.IP "\fB\-\-confirm\fR"
+Show the file count and total size of the files the pusher wants to send, and
+ask the user to confirm or cancel the transfer before proceeding.
 .IP "\fB\-\-discover\-port\fR \fIport\fR"
 Specify the discovery port number. This is the UDP port number on which we
 send our announcement packets. \fBton push\fR must be expecting them on the
@@ -94,7 +97,7 @@ Use this specific passphrase rather than prompting for one.
 Conventionally a passphrase is multiple words, but it may be any arbitrary
 byte string.
 .IP "\fB\-q\fR, \fB\-\-quiet\fR"
-Don't show the progress indicator or any non-essential commentary.
+Don't show the progress indicator or non-essential commentary.
 .IP "\fB\-v\fR, \fB\-\-verbose\fR"
 Show extra diagnostic output, including details of announcement packets sent
 and any incoming connections received as a result.

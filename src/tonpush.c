@@ -24,36 +24,37 @@
 #include "discover.h"
 
 enum main_push_longopts {
-    PUSH_PASSPHRASE = 256,
+    PUSH_OPTS_START = 256,
     PUSH_DISCOVER_PORT,
-    PUSH_MULTICAST_ADDRESS_IPV4,
-    PUSH_MULTICAST_ADDRESS_IPV6,
-    PUSH_SEND_FULL_METADATA,
+    PUSH_HIDE_PASSPHRASE,
+    PUSH_INCLUDE_GLOBAL,
     PUSH_IPV4,
     PUSH_IPV6,
-    PUSH_INCLUDE_GLOBAL,
+    PUSH_MULTICAST_ADDRESS_IPV4,
+    PUSH_MULTICAST_ADDRESS_IPV6,
+    PUSH_PASSPHRASE,
     PUSH_PROMPT_PASSPHRASE,
-    PUSH_HIDE_PASSPHRASE,
-    PUSH_TIMEOUT,
     PUSH_QUIET,
+    PUSH_SEND_FULL_METADATA,
+    PUSH_TIMEOUT,
 };
 
 static const struct option longopts[] = {
-    { "passphrase", 1, NULL, PUSH_PASSPHRASE },
     { "discover-port", 1, NULL, PUSH_DISCOVER_PORT },
+    { "help", 0, NULL, 'h' },
+    { "hide-passphrase", 0, NULL, PUSH_HIDE_PASSPHRASE },
     { "include-global", 0, NULL, PUSH_INCLUDE_GLOBAL },
-    { "multicast-address-ipv4", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV4 },
-    { "multicast-address-ipv6", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV6 },
-    { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
     { "ipv4", 0, NULL, PUSH_IPV4 },
     { "ipv6", 0, NULL, PUSH_IPV6 },
-    { "words", 1, NULL, 'w' },
+    { "multicast-address-ipv4", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV4 },
+    { "multicast-address-ipv6", 1, NULL, PUSH_MULTICAST_ADDRESS_IPV6 },
+    { "passphrase", 1, NULL, PUSH_PASSPHRASE },
     { "prompt-passphrase", 0, NULL, PUSH_PROMPT_PASSPHRASE },
-    { "hide-passphrase", 0, NULL, PUSH_HIDE_PASSPHRASE },
-    { "timeout", 1, NULL, PUSH_TIMEOUT },
     { "quiet", 0, NULL, PUSH_QUIET },
-    { "help", 0, NULL, 'h' },
+    { "send-full-metadata", 0, NULL, PUSH_SEND_FULL_METADATA },
+    { "timeout", 1, NULL, PUSH_TIMEOUT },
     { "verbose", 0, NULL, 'v' },
+    { "words", 1, NULL, 'w' },
 
     { NULL, 0, NULL, 0 }
 };
