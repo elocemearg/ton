@@ -21,7 +21,10 @@ else
     CUNIT_INCLUDE="./src"
 fi
 
-$GCC -Wall -DWINDOWS=1 $DEFINE_CUNIT -std=gnu99 -g -static \
+GIT_COMMIT_HASH=$(git rev-parse HEAD) || GIT_COMMIT_HASH=unknown
+
+$GCC -Wall -DWINDOWS=1 $DEFINE_CUNIT \
+    -DTON_GIT_COMMIT_HASH="\"$GIT_COMMIT_HASH\"" -std=gnu99 -g -static \
     -I "$OPENSSL_INCLUDE" -I "$CUNIT_INCLUDE" \
     -o ton.exe \
     src/ton.c src/tontest.c src/tonpush.c src/tonpull.c src/discover.c \

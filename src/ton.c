@@ -8,6 +8,17 @@
 #include "tontest.h"
 #include "utils.h"
 
+#ifndef TON_GIT_COMMIT_HASH
+#define TON_GIT_COMMIT_HASH "unknown"
+#endif
+
+void
+print_version(void) {
+    printf("ton\n");
+    printf("git commit hash: %s\n", TON_GIT_COMMIT_HASH);
+    printf("This binary was compiled on %s at %s\n", __DATE__, __TIME__);
+}
+
 int main(int argc, char **argv) {
     char *verb;
     int ret = 0;
@@ -27,6 +38,7 @@ int main(int argc, char **argv) {
 "Usage:\n"
 "    ton push [options] <file> ...\n"
 "    ton pull [options]\n"
+"    ton version\n"
 "Run ton push -h or ton pull -h for further help.\n");
         exit(1);
     }
@@ -40,6 +52,9 @@ int main(int argc, char **argv) {
     }
     else if (!strcmp(verb, "test")) {
         ret = main_test(argc - 1, argv + 1);
+    }
+    else if (!strcmp(verb, "version")) {
+        print_version();
     }
     else {
         fprintf(stderr, "Unknown command %s\nTry \"ton push\" or \"ton pull\".\n", verb);
