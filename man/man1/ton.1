@@ -26,20 +26,20 @@ found in their respective man pages \fIton-push\fR(1) and \fIton-pull\fR(1).
 .PP
 Generally, a \fBton\fR file transfer is set up like this:
 .IP 1. 4
-Run \fBton push\fR \fIfilename\fR on the sending machine. It will generate a
+Run \fBton push\fR \fIfilename\fR on the sending host. It will generate a
 passphrase, tell you what it is, and start listening for announcements from
 \fBton pull\fR.
 .IP 2. 4
-Run \fBton pull\fR on the receiving machine, or \fBton pull\fR \fIdestdir\fR
+Run \fBton pull\fR on the receiving host, or \fBton pull\fR \fIdestdir\fR
 if you want the received files to go somewhere other than the current working
 directory. It will prompt for a passphrase - enter the same passphrase as
-on the sending machine.
+on the sending host.
 .IP 3. 4
 The two \fBton\fR processes will find each other on the network, authenticate
 to each other with the passphrase, and transfer the file from the sending
-machine to the receiving machine.
+host to the receiving host.
 .IP 4. 4
-If you get the passphrase wrong, or the two machines can't see each other on
+If you get the passphrase wrong, or the two hosts can't see each other on
 the network, or communication is blocked by a firewall, it will look like
 nothing is happening and \fBton pull\fR will complain every 10 seconds or so.
 Run both sides with \fB\-v\fR for extra diagnostic output.
