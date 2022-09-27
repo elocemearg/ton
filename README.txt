@@ -14,8 +14,11 @@ Install the following packages, if they are not already installed:
 
 To build:
     make ton
-
 This produces a binary, "ton".
+
+To install:
+    sudo make install
+This installs ton in /usr/local/bin/ and the man pages in /usr/local/share/man/.
 
 To run and get help:
     ton push -h
@@ -29,7 +32,7 @@ To transfer a file:
         ton pull [destination]
         [enter same passphrase]
 
-Both machines must be on the same network and the passphrase must be correct.
+Both machines must be on the same network and the passphrase must match.
 
 
 To build with unit tests:
