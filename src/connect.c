@@ -177,7 +177,7 @@ tonmcctx_run(struct tonmcctx *ctx, fd_set *writable_fds, fd_set *exception_fds) 
             else if (err != 0) {
                 /* Failed to connect */
                 if (ctx->verbose) {
-                    ton_socket_error(0, "connect");
+                    ton_socket_error_aux(0, err, "connect");
                 }
                 s->failed = true;
             }

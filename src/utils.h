@@ -72,6 +72,12 @@ ton_error(int exit_status, int err, const char *format, ...);
 void
 ton_socket_error(int exit_status, const char *format, ...);
 
+/* Call ton_error(), interpreting err as a socket error. On Linux socket
+ * errors are in the errno namespace, but on Windows they're a separate set
+ * of numbers. */
+void
+ton_socket_error_aux(int exit_status, int err, const char *format, ...);
+
 /* Return a newly-allocated string whose contents are equivalent to
  * what vsnprintf(str, size, fmt, ap) would copy into str if the size were
  * big enough.

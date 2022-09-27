@@ -98,10 +98,9 @@ ton_error(int exit_status, int err, const char *format, ...) {
 }
 
 #ifdef WINDOWS
+
 void
-ton_socket_error(int exit_status, const char *format, ...) {
-    va_list ap;
-    int err = WSAGetLastError();
+ton_socket_error_aux_v(int exit_status, int err, const char *format, va_list ap) {
     char errstr[256] = "";
     int rc;
 
@@ -115,11 +114,29 @@ ton_socket_error(int exit_status, const char *format, ...) {
         snprintf(errstr, sizeof(errstr), "Winsock error %d", err);
     }
 
-    va_start(ap, format);
     ton_verror(exit_status, errstr, format, ap);
     va_end(ap);
 }
+
+void
+ton_socket_error_aux(int exit_status, int err, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    ton_socket_error_aux_v(exit_status, err, format, ap);
+    va_end(ap);
+}
+
+void
+ton_socket_error(int exit_status, const char *format, ...) {
+    va_list ap;
+    int err = WSAGetLastError();
+    va_start(ap, format);
+    ton_socket_error_aux_v(exit_status, err, format, ap);
+    va_end(ap);
+}
+
 #else
+
 void ton_socket_error(int exit_status, const char *format, ...) {
     va_list ap;
     int err = errno;
@@ -127,6 +144,14 @@ void ton_socket_error(int exit_status, const char *format, ...) {
     ton_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
     va_end(ap);
 }
+
+void ton_socket_error_aux(int exit_status, int err, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    ton_verror(exit_status, err == 0 ? NULL : strerror(err), format, ap);
+    va_end(ap);
+}
+
 #endif
 
 char *
