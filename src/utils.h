@@ -18,6 +18,7 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <time.h>
 
 /* Address families bitmasks */
 #define TON_IPV4 1
@@ -134,6 +135,12 @@ ton_make_socket_blocking(int sock);
 int
 ton_make_socket_non_blocking(int sock);
 
+/* Convert the Unix time *timep to a broken-down time in *result. Return -1 on
+ * failure or 0 on success.
+ * We call localtime_r() if that's available, otherwise on Windows we call
+ * localtime_s(). */
+int
+ton_localtime_r(const time_t *timep, struct tm *result);
 
 #ifdef TON_UNIT_TESTS
 

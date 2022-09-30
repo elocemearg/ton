@@ -185,7 +185,7 @@ check_file(void *cookie, const struct ton_file *file) {
             const TON_LF_CHAR *local_basename;
 
             if (stat_rc == 0) {
-                localtime_r(&st.st_mtime, &tm);
+                ton_localtime_r(&st.st_mtime, &tm);
                 strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S %Z", &tm);
                 ton_size_to_str(st.st_size, size_str);
             }
@@ -200,7 +200,7 @@ check_file(void *cookie, const struct ton_file *file) {
             fprintf(stderr, "  Do you want to replace the existing file:\n");
             fprintf(stderr, "      %s  %s  " TON_LF_PRINTF "\n", timestamp_str, size_str, local_basename);
 
-            localtime_r(&file->mtime, &tm);
+            ton_localtime_r(&file->mtime, &tm);
             strftime(timestamp_str, sizeof(timestamp_str), "%Y-%m-%d %H:%M:%S %Z", &tm);
             ton_size_to_str(file->size, size_str);
 

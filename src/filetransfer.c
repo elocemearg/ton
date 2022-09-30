@@ -1272,6 +1272,33 @@ fail:
     goto end;
 }
 
+
+/* Set the modified time and permission bits of the local file tf->local_path
+ * according to tf->mtime and tf->mode.
+ * If we failed to do either, report it with ton_error(). */
+static void
+set_received_file_metadata(struct ton_file *tf) {
+    /* Sender reports that it sent the file successfully. Set the file's mode
+     * and timestamp according to the metadata message we received before the
+     * file data. */
+#ifdef WINDOWS
+    /* utime() can't set a directory's modification time on Windows */
+    if (!S_ISDIR(tf->mode))
+#endif
+    {
+        TON_UTIMBUF timbuf;
+        timbuf.actime = time(NULL);
+        timbuf.modtime = tf->mtime;
+        if (ton_utime(tf->local_path, &timbuf) < 0) {
+            ton_error(0, errno, "warning: failed to set modification time of " TON_LF_PRINTF, tf->local_path);
+        }
+    }
+
+    if (ton_chmod(tf->local_path, tf->mode & 07777) < 0) {
+        ton_error(0, errno, "warning: failed to set mode %03o on " TON_LF_PRINTF, tf->mode & 07777, tf->local_path);
+    }
+}
+
 /* Write a progress counter to stderr showing how far we are through the
  * file transfer. */
 static void
@@ -1575,45 +1602,30 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                     goto fail;
                 }
                 current_file = NULL;
-            }
 
-            if (decoded.u.err.code == 0) {
-                if (ctx->output_file == NULL) {
-                    /* Sender reports that it sent the file successfully.
-                     * Set the file's mode and timestamp according to the
-                     * metadata message we received before the file data. */
-#ifdef WINDOWS
-                    /* utime() can't set a directory's modification time on Windows */
-                    if (!S_ISDIR(current_ton_file.mode))
-#endif
-                    {
-                        TON_UTIMBUF timbuf;
-                        timbuf.actime = time(NULL);
-                        timbuf.modtime = current_ton_file.mtime;
-                        if (ton_utime(current_ton_file.local_path, &timbuf) < 0) {
-                            ton_error(0, errno, "warning: failed to set modification time of " TON_LF_PRINTF, current_ton_file.local_path);
-                        }
-                    }
-
-                    if (ton_chmod(current_ton_file.local_path, current_ton_file.mode & 07777) < 0) {
-                        ton_error(0, errno, "warning: failed to set mode %03o on " TON_LF_PRINTF, current_ton_file.mode & 07777, current_ton_file.local_path);
+                if (decoded.u.err.code == 0) {
+                    if (ctx->output_file == NULL) {
+                        /* Set modified time and permission bits of this file
+                         * we've just written, based on the metadata info we
+                         * were sent before the file's data. */
+                        set_received_file_metadata(&current_ton_file);
                     }
                 }
-            }
-            else {
-                /* The transfer of this file ended because the sender failed
-                 * to read from or open it. This is not a fatal error, but we
-                 * report and remember it, and delete any partially-transferred
-                 * file. */
-                if (ctx->output_file == NULL) {
-                    ton_unlink(current_ton_file.local_path);
-                }
-                files_sender_failed++;
+                else {
+                    /* The transfer of this file ended because the sender
+                     * failed to read from or open it. This is not a fatal
+                     * error, but we report and remember it, and delete any
+                     * partially-transferred file. */
+                    if (ctx->output_file == NULL) {
+                        ton_unlink(current_ton_file.local_path);
+                    }
+                    files_sender_failed++;
 
-                /* Don't expect the rest of this file */
-                if (total_bytes_remaining > 0 && current_ton_file.size >= 0)
-                    total_bytes_remaining -= current_ton_file.size - current_file_position;
-                ton_error(0, 0, "warning: sender skipped " TON_LF_PRINTF ": %s", current_ton_file.local_path, decoded.u.err.message);
+                    /* Don't expect the rest of this file */
+                    if (total_bytes_remaining > 0 && current_ton_file.size >= 0)
+                        total_bytes_remaining -= current_ton_file.size - current_file_position;
+                    ton_error(0, 0, "warning: sender skipped " TON_LF_PRINTF ": %s", current_ton_file.local_path, decoded.u.err.message);
+                }
             }
 
             /* We're no longer inside a file transfer, so the next message

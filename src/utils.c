@@ -335,6 +335,29 @@ ton_make_socket_non_blocking(int sock) {
 }
 #endif
 
+#ifdef WINDOWS
+int
+ton_localtime_r(const time_t *timep, struct tm *result) {
+    int ret = localtime_s(result, timep);
+    if (ret != 0) {
+        errno = ret;
+        return -1;
+    }
+    else {
+        return 0;
+    }
+}
+#else
+int
+ton_localtime_r(const time_t *timep, struct tm *result) {
+    struct tm *ret = localtime_r(timep, result);
+    if (ret == NULL)
+        return -1;
+    else
+        return 0;
+}
+#endif
+
 /*****************************************************************************/
 
 #ifdef TON_UNIT_TESTS
