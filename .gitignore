@@ -4,3 +4,4 @@ ton.exe
 *.o
 *.swp
 *.1.gz
+__pycache__
