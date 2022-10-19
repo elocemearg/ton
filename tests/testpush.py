@@ -23,8 +23,11 @@ def create_file(containing_dir, file_def, byte_generator=None):
         file_mode = "w"
     with open(path, file_mode) as f:
         if contents is not None:
+            # The definition requires this file to have specific contents.
             f.write(contents)
         else:
+            # The definition requires this file to be a certain length of
+            # deterministically pseudorandom rubbish.
             for i in range(0, length, 256):
                 if i + 256 > length:
                     chunk_length = length - i
@@ -57,8 +60,18 @@ def main():
         print("PUSH: [%d/%d] test %s..." % (test_num, num_tests, test_name))
         with tempfile.TemporaryDirectory(prefix="tontest_push_" + test_name) as temp_dir_name:
             passphrase = "passphrase " + test_name
+
+            # Create our directory and file structure for this test
             create_file_set_def(temp_dir_name, file_set_def["entries"], byte_generator)
+
+            # Name each dir or file in temp_dir_name on the command line
             top_level_entries = [ entry["name"] for entry in file_set_def["entries"] ]
+
+            # Build the command line which consists of:
+            # ton push [test-specific args] --passphrase <passphrase> -t 30
+            # The passphrase is derived from the test name and testpull.py
+            # derives the same passphrase. The timeout is so that if
+            # testpull.py fails we'll eventually exit.
             command = [ ton_path, "push" ]
             command += push_args
             command += [ "--passphrase", passphrase, "-t", "30"]

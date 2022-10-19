@@ -75,14 +75,17 @@ def main():
         file_set_def = testcommon.file_set_defs[file_set_name]
         print("PULL: [%d/%d] test %s..." % (test_num, num_tests, test_name))
         with tempfile.TemporaryDirectory(prefix="tontest_pull_" + test_name) as temp_dir_name:
+            # Build our "ton pull" command, to receive the files and put them
+            # in the directory temp_dir_name.
             passphrase = "passphrase " + test_name
-            top_level_entries = [ entry["name"] for entry in file_set_def["entries"] ]
             command = [ ton_path, "pull" ]
             command += pull_args
             command += [ "--passphrase", passphrase, "--max-announcements", "30" ]
             command += [ temp_dir_name ]
             subprocess.run(command, check=True)
 
+            # Check that we got all the files, we didn't get any extra files,
+            # and all the files we got have the right contents.
             check_against_file_set_def(temp_dir_name, file_set_def["entries"], byte_generator)
         print("PULL: [%d/%d] test %s passed." % (test_num, num_tests, test_name))
         test_num += 1

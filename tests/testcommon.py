@@ -5,6 +5,22 @@ import random
 
 BYTE_GEN_DEFAULT_SEED = 12345
 
+"""
+file_set_defs: mapping of names to definitions.
+
+Each definition represents a directory structure and the files in it.
+Each definition contains an array called "entries", each element of which is
+a directory entry or a file entry.
+
+A directory entry ("type" : "dir") contains a "name" and another
+"entries" array which contains the directory's entries.
+
+A file entry ("type" : "file") contains a "name" and either an integer
+"length" or a string "contents". "contents" specifies the string contents
+of the file, otherwise "length" means the file is to contain a pseudorandom
+sequence of this byte length.
+"""
+
 file_set_defs = {
     "random1" : {
         "entries" : [
@@ -89,6 +105,19 @@ file_set_defs = {
         ]
     }
 }
+
+
+"""
+test_defs: array of test definitions.
+
+Each entry represents a test. Each test object contains the following keys:
+    "name": the unique test name,
+    "file_set": the name of one of the file set definitions in file_set_defs.
+                The pushing side will create this directory structure and the
+                pulling side will receive it and check it's correct.
+    "push_args": extra arguments to "ton push" other than the path.
+    "pull_args": extra arguments to "ton pull" other than the path.
+"""
 
 test_defs = [
     {
