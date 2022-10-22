@@ -34,7 +34,7 @@ TON_C_FILES:=$(wildcard src/*.c)
 TON_H_FILES:=$(wildcard src/*.h)
 GIT_COMMIT_HASH:=$(shell git rev-parse HEAD || echo unknown)
 
-# Linux executable: build with TON_C_FILES and the generated word list file.
+# Linux executable: build with TON_C_FILES and the word list file.
 ton: $(TON_C_FILES) $(TON_H_FILES) src/wordlist.txt
 	$(CC) $(CFLAGS) -Wpedantic -DUNIX=1 -DTON_GIT_COMMIT_HASH="\"$(GIT_COMMIT_HASH)\"" -o ton $(TON_C_FILES) -Wl,--format=binary -Wl,src/wordlist.txt -Wl,--format=default $(LDFLAGS)
 
@@ -60,4 +60,4 @@ install: ton man/man1/ton-push.1.gz man/man1/ton-pull.1.gz man/man1/ton.1.gz
 	cp ./ton $(INSTALL_DEST_DIR)/ && mkdir -p $(INSTALL_MAN_DEST_DIR) && cp man/man1/*.gz $(INSTALL_MAN_DEST_DIR)/
 
 clean:
-	rm -f ton ton.exe wordlist/generatedwordlist.c src/*.o
+	rm -f ton ton.exe

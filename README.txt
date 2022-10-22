@@ -7,7 +7,6 @@ To build ton on Linux, for Linux:
 Install the following packages, if they are not already installed:
     gcc
     glibc
-    python3 (to generate passphrase word list)
     libssl-dev
     libcunit1 (only if you want to run the unit tests)
     libcunit1-dev (only if you want to run the unit tests)
@@ -44,12 +43,20 @@ To run the unit tests:
 
 Building ton on Linux for Windows is also possible with MinGW, but you need to
 install mingw64, download OpenSSL (and CUnit if required) and build custom
-MinGW versions of them, then edit the paths at the top of compile_win.sh, then
-run that. This produces a Windows binary "ton.exe".
+MinGW versions of them.
 
 To configure and build OpenSSL with MinGW:
+    * Download and unpack OpenSSL
+    * Navigate to the unpacked directory
+    * ./Configure --cross-compile-prefix=x86_64-w64-mingw32- mingw64
+    * make
 
-* Download and unpack OpenSSL
-* Navigate to the unpacked directory
-* ./Configuire --cross-compile-prefix=x86_64-w64-mingw32- mingw64
-* make
+ton's Makefile then requires the following environment variables to be set:
+MINGW_OPENSSL_ROOT: the path containing the libssl.a and libcrypto.a files
+you built with MinGW.
+MINGW_CUNIT_ROOT: the path to the top-level directory containing
+install/lib/libcunit.a. (This is only required if you're building ton.exe with
+the unit tests using TON_CUNIT=1.)
+
+Then run "make ton.exe".
+
