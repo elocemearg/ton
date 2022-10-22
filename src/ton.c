@@ -7,6 +7,7 @@
 #include "tonpull.h"
 #include "tontest.h"
 #include "utils.h"
+#include "wordlist.h"
 
 #ifndef TON_GIT_COMMIT_HASH
 #define TON_GIT_COMMIT_HASH "unknown"
@@ -62,6 +63,8 @@ int main(int argc, char **argv) {
     }
 
     ton_sockets_teardown();
+
+    ton_wordlist_free();
 
     return ret;
 }
