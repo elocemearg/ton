@@ -17,14 +17,10 @@ def create_file(containing_dir, file_def, byte_generator=None):
     length = file_def.get("length", 0)
 
     path = os.path.join(containing_dir, basename)
-    if contents is None or type(contents) == bytes:
-        file_mode = "wb"
-    else:
-        file_mode = "w"
-    with open(path, file_mode) as f:
+    with open(path, "wb") as f:
         if contents is not None:
             # The definition requires this file to have specific contents.
-            f.write(contents)
+            f.write(contents.encode("utf-8"))
         else:
             # The definition requires this file to be a certain length of
             # deterministically pseudorandom rubbish.

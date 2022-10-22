@@ -14,8 +14,8 @@ class FileSetContentsMismatchException(Exception):
     pass
 
 def check_file_contents(path, expected_contents):
-    with open(path, "r") as f:
-        observed_contents = f.read()
+    with open(path, "rb") as f:
+        observed_contents = f.read().decode("utf-8")
         if expected_contents != observed_contents:
             raise FileSetContentsMismatchException("%s: expected contents:\n%s\tobserved contents:\n%s" % (path, expected_contents, observed_contents))
 

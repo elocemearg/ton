@@ -20,7 +20,7 @@ ifeq ($(CUNIT),1)
 	CFLAGS := $(CFLAGS) -DTON_UNIT_TESTS
 	LDFLAGS := $(LDFLAGS) -lcunit
 	MINGW_LINK_CUNIT_PATH := "-L$(MINGW_CUNIT_ROOT)/install/lib"
-	MINGW_CUNIT_INCLUDE := -I "$(MINGW_CUNIT_ROOT)/include"
+	MINGW_CUNIT_INCLUDE := -I "$(MINGW_CUNIT_ROOT)/install/include"
 else
 	# If we're not building the unit tests, still set MINGW_CUNIT_ROOT to "."
 	# because if we leave it blank the ton.exe recipe will think we need cunit
