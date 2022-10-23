@@ -3,6 +3,7 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
+#include <openssl/crypto.h>
 
 #include "tonpush.h"
 #include "tonpull.h"
@@ -46,11 +47,12 @@ print_version(void) {
     printf("ton %s\n", TON_VERSION_STRING);
     printf("Copyright 2022 by Graeme Cole <graeme@greem.co.uk>\n");
     printf("Released under the 3-Clause BSD License (see \"ton licence\" for details).\n");
+    printf("git commit hash: %s\n", TON_GIT_COMMIT_HASH);
+    printf("This binary was compiled on %s at %s\n", __DATE__, __TIME__);
 #ifdef TON_CONTAINS_OPENSSL
     printf("This binary has parts of OpenSSL compiled into it (see \"ton notices\").\n");
 #endif
-    printf("git commit hash: %s\n", TON_GIT_COMMIT_HASH);
-    printf("This binary was compiled on %s at %s\n", __DATE__, __TIME__);
+    printf("Using OpenSSL version: %s\n", SSLeay_version(SSLEAY_VERSION));
 }
 
 void
