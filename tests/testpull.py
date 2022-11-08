@@ -34,7 +34,12 @@ def check_file_pseudorandom_contents(path, expected_length, byte_generator):
                         raise FileSetContentsMismatchException("%s: position %d: incorrect byte: expected 0x%02x, observed 0x%02x" % (path, bytes_read + i, int(expected_chunk[i]), int(chunk[i])))
                 bytes_read += length
 
-def check_against_file_set_def(path, entries, byte_generator):
+def check_symlink(path, expected_target):
+    observed_target = os.readlink(path)
+    if observed_target != expected_target:
+        raise FileSetContentsMismatchException("%s: expected link target %s, observed %s" % (path, expected_target, observed_target))
+
+def check_against_file_set_def(path, entries, byte_generator, ignore_symlinks=False):
     # Ensure the list of files/dirs in "path", sorted alphabetically, is
     # identical to the names of entries in "entries", sorted alphabetically.
     path_entries = sorted(os.listdir(path))
@@ -61,9 +66,12 @@ def check_against_file_set_def(path, entries, byte_generator):
             else:
                 check_file_pseudorandom_contents(entry_path, entry["length"], byte_generator)
         elif entry["type"] == "dir":
-            check_against_file_set_def(entry_path, entry["entries"], byte_generator)
+            check_against_file_set_def(entry_path, entry["entries"], byte_generator, ignore_symlinks)
+        elif entry["type"] == "symlink" and not ignore_symlinks:
+            check_symlink(entry_path, entry["target"])
 
 def main():
+    ignore_symlinks = ("-i" in sys.argv or os.name == "nt")
     byte_generator = testcommon.DeterministicByteGenerator()
     ton_path = os.path.join(os.path.dirname(__file__), "..", "ton")
     num_tests = len(testcommon.test_defs)
@@ -74,7 +82,7 @@ def main():
         file_set_name = test_def["file_set"]
         file_set_def = testcommon.file_set_defs[file_set_name]
         print("PULL: [%d/%d] test %s..." % (test_num, num_tests, test_name))
-        with tempfile.TemporaryDirectory(prefix="tontest_pull_" + test_name) as temp_dir_name:
+        with tempfile.TemporaryDirectory(prefix="tontest_pull_" + test_name + "_") as temp_dir_name:
             # Build our "ton pull" command, to receive the files and put them
             # in the directory temp_dir_name.
             passphrase = "passphrase " + test_name
@@ -86,7 +94,7 @@ def main():
 
             # Check that we got all the files, we didn't get any extra files,
             # and all the files we got have the right contents.
-            check_against_file_set_def(temp_dir_name, file_set_def["entries"], byte_generator)
+            check_against_file_set_def(temp_dir_name, file_set_def["entries"], byte_generator, ignore_symlinks)
         print("PULL: [%d/%d] test %s passed." % (test_num, num_tests, test_name))
         test_num += 1
     sys.exit(0)

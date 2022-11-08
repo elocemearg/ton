@@ -32,6 +32,9 @@ def create_file(containing_dir, file_def, byte_generator=None):
                 chunk = byte_generator.randbytes(chunk_length)
                 f.write(chunk)
 
+def create_symlink(containing_dir, name, target):
+    os.symlink(target, os.path.join(containing_dir, name))
+
 def create_file_set_def(containing_dir, file_set_entries, byte_generator):
     for entry in file_set_entries:
         name = entry["name"]
@@ -42,6 +45,8 @@ def create_file_set_def(containing_dir, file_set_entries, byte_generator):
             create_file_set_def(new_dir, sub_entries, byte_generator)
         elif entry["type"] == "file":
             create_file(containing_dir, entry)
+        elif entry["type"] == "symlink" and os.name != "nt":
+            create_symlink(containing_dir, name, entry["target"])
 
 def main():
     byte_generator = testcommon.DeterministicByteGenerator()
@@ -54,7 +59,7 @@ def main():
         file_set_name = test_def["file_set"]
         file_set_def = testcommon.file_set_defs[file_set_name]
         print("PUSH: [%d/%d] test %s..." % (test_num, num_tests, test_name))
-        with tempfile.TemporaryDirectory(prefix="tontest_push_" + test_name) as temp_dir_name:
+        with tempfile.TemporaryDirectory(prefix="tontest_push_" + test_name + "_") as temp_dir_name:
             passphrase = "passphrase " + test_name
 
             # Create our directory and file structure for this test

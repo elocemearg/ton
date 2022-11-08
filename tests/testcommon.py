@@ -19,6 +19,9 @@ A file entry ("type" : "file") contains a "name" and either an integer
 "length" or a string "contents". "contents" specifies the string contents
 of the file, otherwise "length" means the file is to contain a pseudorandom
 sequence of this byte length.
+
+A symlink entry ("type" : "symlink") contains a "name" and "target" and is
+ignored on Windows.
 """
 
 file_set_defs = {
@@ -89,6 +92,11 @@ file_set_defs = {
                 "type" : "file",
                 "name" : "toplevelfile.bin",
                 "length" : 1024
+            },
+            {
+                "type" : "symlink",
+                "name" : "½.link.txt",
+                "target" : "dir_1/dir_1_2/½.txt"
             }
         ]
     },
