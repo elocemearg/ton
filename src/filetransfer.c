@@ -192,8 +192,12 @@ ton_dir_walk_aux(TON_LF_CHAR *path, int orig_path_start,
             ret = -1;
         }
     }
-    else if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode)) {
-        /* This is an ordinary file or FIFO. Call the callback on it. */
+    else if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode)
+#ifndef WINDOWS
+            || S_ISLNK(st.st_mode)
+#endif
+            ) {
+        /* This is an ordinary file, FIFO or symlink. Call the callback on it. */
         int cbret = callback(cookie, path, &st, orig_path_start);
         if (cbret < 0) {
             ret = -1;
@@ -424,6 +428,7 @@ static void
 ton_file_free(struct ton_file *file) {
     free(file->local_path);
     free(file->ton_path);
+    free(file->symlink_target);
     free(file);
 }
 
@@ -454,10 +459,12 @@ ton_file_list_destroy(struct ton_file_list *list) {
  *        since 1970-01-01 00:00:00).
  * mode: the Unix-style mode bits for the file.
  * size: the size of the file, in bytes. -1 if not known.
+ * symlink_target: If S_ISLNK(mode) is true, symlink_target is the target path
+ * of the symlink. Otherwise, symlink_target is ignored.
  */
 static struct ton_file *
 ton_file_new(TON_LF_CHAR *local_path, const char *ton_path, time_t mtime,
-        int mode, long long size) {
+        int mode, long long size, const char *symlink_target) {
     struct ton_file *f = malloc(sizeof(struct ton_file));
     if (f == NULL) {
         return NULL;
@@ -482,6 +489,14 @@ ton_file_new(TON_LF_CHAR *local_path, const char *ton_path, time_t mtime,
     f->mtime = mtime;
     f->mode = mode;
     f->size = size;
+    if (symlink_target) {
+        f->symlink_target = strdup(symlink_target);
+        if (f->symlink_target == NULL)
+            goto fail;
+    }
+    else {
+        f->symlink_target = NULL;
+    }
     f->next = NULL;
 
     return f;
@@ -502,11 +517,18 @@ add_local_file_to_list(void *cookie, TON_LF_CHAR *path, TON_STAT *st, int orig_p
 
     if (orig_path_start < 0) {
         /* stdin */
-        file = ton_file_new(TON_LF_STDIN, NULL, time(NULL), S_IFREG | 0644, -1);
+        file = ton_file_new(TON_LF_STDIN, NULL, time(NULL), S_IFREG | 0644, -1, NULL);
     }
     else {
         /* an actual file */
-        file = ton_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size);
+        char *symlink_target = NULL;
+#ifndef WINDOWS
+        if (S_ISLNK(st->st_mode)) {
+            symlink_target = ton_get_symlink_target(path);
+        }
+#endif
+        file = ton_file_new(path, NULL, st->st_mtime, st->st_mode, st->st_size, symlink_target);
+        free(symlink_target);
     }
     if (file == NULL) {
         ton_error(0, errno, "failed to create new file object structure for " TON_LF_PRINTF, path);
@@ -541,10 +563,11 @@ add_local_file_to_list(void *cookie, TON_LF_CHAR *path, TON_STAT *st, int orig_p
  * Derive the local_path attribute by the ton_name given and local_base_dir. */
 static int
 add_ton_file_to_list(struct ton_file_list *list, long long size, time_t mtime,
-        int mode, const char *ton_name, const TON_LF_CHAR *local_base_dir) {
+        int mode, const char *ton_name, const char *symlink_target,
+        const TON_LF_CHAR *local_base_dir) {
     struct ton_file *file = NULL;
 
-    file = ton_file_new(NULL, ton_name, mtime, mode, size);
+    file = ton_file_new(NULL, ton_name, mtime, mode, size, (symlink_target && *symlink_target) ? symlink_target : NULL);
     if (file == NULL) {
         ton_error(0, errno, "failed to create new file object structure for %s", ton_name);
         return -1;
@@ -659,7 +682,7 @@ ton_msg_send(struct ton_session *sess, struct ton_msg *msg) {
  * correct according to msg_defs in protocol.c or undefined behaviour occurs.
  *
  * For example:
- *    ton_send_message(sess, TON_MSG_FILE_METADATA, (long long) size, (time_t) mtime, (int) mode, (char *) filename);
+ *    ton_send_message(sess, TON_MSG_FILE_METADATA, (long long) size, (time_t) mtime, (int) mode, (char *) filename, (char *) symlink_target);
  *    ton_send_message(sess, TON_MSG_ERROR, TON_ERR_PROTOCOL, "expected message, received rotting fish");
  *    ton_send_message(sess, TON_MSG_FILE_SET_END);
  *
@@ -920,7 +943,7 @@ ton_send_file(struct ton_file_transfer *ctx, struct ton_session *sess,
     *file_failed = 0;
 
     /* Send a metadata message, so the receiver knows to expect a file. */
-    if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path) < 0) {
+    if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path, f->symlink_target) < 0) {
         goto fail;
     }
 
@@ -1098,7 +1121,7 @@ ton_file_transfer_session_sender(struct ton_file_transfer *ctx,
     for (struct ton_file *f = file_list.start; f; f = f->next) {
         if (ctx->send_full_metadata) {
             /* Send a metadata description for every file */
-            if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path) < 0) {
+            if (ton_send_message(sess, TON_MSG_FILE_METADATA, f->size, f->mtime, f->mode, f->ton_path, f->symlink_target) < 0) {
                 goto fail;
             }
         }
@@ -1237,7 +1260,8 @@ ton_receive_file_metadata_set(struct ton_session *sess,
             /* Full list of files */
             int rc = add_ton_file_to_list(list, decoded.u.metadata.size,
                     decoded.u.metadata.mtime, decoded.u.metadata.mode,
-                    decoded.u.metadata.name, output_dir);
+                    decoded.u.metadata.name, decoded.u.metadata.symlink_target,
+                    output_dir);
             if (rc < 0) {
                 goto fail;
             }
@@ -1455,6 +1479,21 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 ton_error(0, errno, "failed to allocate path name");
                 goto fail;
             }
+            free(current_ton_file.symlink_target);
+#ifdef WINDOWS
+            current_ton_file.symlink_target = NULL;
+#else
+            if (S_ISLNK(current_ton_file.mode)) {
+                current_ton_file.symlink_target = strdup(decoded.u.metadata.symlink_target);
+                if (current_ton_file.symlink_target == NULL) {
+                    ton_error(0, errno, "failed to allocate symlink target string");
+                    goto fail;
+                }
+            }
+            else {
+                current_ton_file.symlink_target = NULL;
+            }
+#endif
             current_ton_file.next = NULL;
 
             if (ctx->output_file != NULL) {
@@ -1510,17 +1549,31 @@ ton_receive_file_set(struct ton_file_transfer *ctx, struct ton_session *sess,
                 }
             }
 #ifndef WINDOWS
-            else if (S_ISFIFO(current_ton_file.mode)) {
-                /* Create a FIFO, creating its containing directories if necessary. */
+            else if (S_ISFIFO(current_ton_file.mode) || S_ISLNK(current_ton_file.mode)) {
+                /* Create a FIFO or symlink, creating its containing
+                 * directories if necessary. */
                 if (ton_mkdir_parents(current_ton_file.local_path, 0777, true) < 0) {
+                    const char *file_type = (S_ISFIFO(current_ton_file.mode) ? "fifo" : "symlink");
                     int err = errno;
-                    ton_error(0, err, "failed to create directory for fifo " TON_LF_PRINTF, current_ton_file.local_path);
-                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE, "failed to create directory for fifo " TON_LF_PRINTF ": %s", current_ton_file.local_path, strerror(err));
+                    ton_error(0, err, "failed to create directory for %s " TON_LF_PRINTF,
+                            file_type, current_ton_file.local_path);
+                    ton_send_fatal_error(sess, TON_ERR_FAILED_TO_WRITE_FILE,
+                            "failed to create directory for %s " TON_LF_PRINTF ": %s",
+                            file_type, current_ton_file.local_path, strerror(err));
                     goto fail;
                 }
-                if (mkfifo(current_ton_file.local_path, current_ton_file.mode & 07777) != 0) {
-                    ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, current_ton_file.local_path);
-                    ++*receiver_skipped_error_count;
+                if (S_ISFIFO(current_ton_file.mode)) {
+                    if (mkfifo(current_ton_file.local_path, current_ton_file.mode & 07777) != 0) {
+                        ton_error(0, errno, "skipping fifo " TON_LF_PRINTF, current_ton_file.local_path);
+                        ++*receiver_skipped_error_count;
+                    }
+                }
+                else {
+                    /* This is a symlink */
+                    if (symlink(current_ton_file.symlink_target, current_ton_file.local_path) != 0) {
+                        ton_error(0, errno, "skipping symlink " TON_LF_PRINTF, current_ton_file.local_path);
+                        ++*receiver_skipped_error_count;
+                    }
                 }
             }
 #endif
@@ -1669,6 +1722,7 @@ end:
     *sender_failed_file_count = files_sender_failed;
     free(current_ton_file.ton_path);
     free(current_ton_file.local_path);
+    free(current_ton_file.symlink_target);
     if (current_file && current_file != ctx->output_file)
         fclose(current_file);
     ton_msg_free(msg);

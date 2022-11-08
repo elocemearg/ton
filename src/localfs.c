@@ -180,7 +180,7 @@ ton_stat(const TON_LF_CHAR *path, TON_STAT *st) {
 #ifdef WINDOWS
     return _wstat64(path, st);
 #else
-    return stat(path, st);
+    return lstat(path, st);
 #endif
 }
 
@@ -344,6 +344,56 @@ ton_lf_basename(const TON_LF_CHAR *path) {
     }
     return bn;
 }
+
+#ifndef WINDOWS
+char *
+ton_get_symlink_target(TON_LF_CHAR *symlink_path) {
+    char *target = NULL;
+    size_t target_size = 0;
+    const size_t target_initial_size = 50;
+    const size_t target_max_size = 10000;
+    ssize_t ret;
+
+    do {
+        /* If target_size is 0 then set it to an initial value, otherwise
+         * double it from what it was last time. */
+        char *new_target;
+        if (target_size == 0) {
+            target_size = target_initial_size;
+        }
+        else if (target_size >= target_max_size) {
+            errno = E2BIG;
+            goto fail;
+        }
+        else {
+            target_size *= 2;
+        }
+        new_target = realloc(target, target_size);
+        if (new_target == NULL) {
+            goto fail;
+        }
+        target = new_target;
+
+        /* Read the symlink target. If the return value is target_size or more
+         * then truncation may have occurred, and we need to try again with a
+         * larger buffer. */
+        ret = readlink(symlink_path, target, target_size);
+        if (ret < 0) {
+            goto fail;
+        }
+        else if (ret < target_size) {
+            target[ret] = '\0';
+        }
+    } while (ret >= target_size);
+
+    return target;
+
+fail:
+    free(target);
+    return NULL;
+}
+#endif
+
 
 /* If *p points to a valid UTF-8 byte sequence, point *p to the first byte
  * after the sequence and return the character.
@@ -566,6 +616,7 @@ ton_lf_from_locale(const char *filename) {
     return strdup(filename);
 #endif
 }
+
 
 /*****************************************************************************/
 

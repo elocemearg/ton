@@ -30,6 +30,9 @@ struct ton_file {
     /* Size of the file in bytes. */
     long long size;
 
+    /* Symlink target path, if mode indicates this file is a symlink. */
+    char *symlink_target;
+
     /* Next file in the list. */
     struct ton_file *next;
 };

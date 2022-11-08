@@ -145,6 +145,13 @@
  *                                         no support for directory components
  *                                         or filenames containing '/' or '\0'.
  *                                         The string must be valid UTF-8.
+ *      after name   variable     string   Symlink target as a '\0'-terminated
+ *                                         string. This is only meaningful if
+ *                                         the file mode field indicates this
+ *                                         is a symlink. This field is optional;
+ *                                         if the message ends after the
+ *                                         filename field the symlink target is
+ *                                         taken as an empty string.
  *
  * TON_MSG_FILE_METADATA_SUMMARY: contains a summary of the files to be sent,
  * if the sender doesn't want to send an itemised list of all the files.
@@ -296,6 +303,7 @@ struct ton_decoded_msg {
             time_t mtime;
             int mode;
             char *name;
+            char *symlink_target;
         } metadata;
 
         /* tag == TON_MSG_FILE_METADATA_SUMMARY */

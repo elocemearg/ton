@@ -185,6 +185,13 @@ ton_realpath(const TON_LF_CHAR *path);
 const TON_LF_CHAR *
 ton_lf_basename(const TON_LF_CHAR *path);
 
+#ifndef WINDOWS
+/* Return the target of the given symlink. It is the caller's responsibility to
+ * free the return value. On error, NULL is returned. */
+char *
+ton_get_symlink_target(TON_LF_CHAR *symlink_path);
+#endif
+
 char *
 ton_lf_to_utf8(const TON_LF_CHAR *filename);
 

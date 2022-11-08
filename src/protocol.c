@@ -34,19 +34,19 @@ struct ton_msg_def {
 
 /* This is searched with bsearch() so the tags must be in ascending order. */
 static struct ton_msg_def msg_defs[] = {
-    { TON_MSG_OK,                      "",      0 },
-    { TON_MSG_ERROR,                   "4s",    5 },
-    { TON_MSG_FATAL_ERROR,             "4s",    5 },
-    { TON_MSG_FILE_METADATA_SET_START, "",      0 },
-    { TON_MSG_FILE_METADATA,           "8t4s", 21 },
-    { TON_MSG_FILE_METADATA_SUMMARY,   "88",   16 },
-    { TON_MSG_FILE_METADATA_SET_END,   "",      0 },
-    { TON_MSG_FILE_SET_START,          "",      0 },
-    { TON_MSG_FILE_DATA_CHUNK,         "*",     0 },
-    { TON_MSG_FILE_DATA_END,           "4s",    5 },
-    { TON_MSG_FILE_SET_END,            "",      0 },
-    { TON_MSG_SWITCH_ROLES,            "",      0 },
-    { TON_MSG_END_SESSION,             "",      0 }
+    { TON_MSG_OK,                      "",       0 },
+    { TON_MSG_ERROR,                   "4s",     5 },
+    { TON_MSG_FATAL_ERROR,             "4s",     5 },
+    { TON_MSG_FILE_METADATA_SET_START, "",       0 },
+    { TON_MSG_FILE_METADATA,           "8t4ss", 21 },
+    { TON_MSG_FILE_METADATA_SUMMARY,   "88",    16 },
+    { TON_MSG_FILE_METADATA_SET_END,   "",       0 },
+    { TON_MSG_FILE_SET_START,          "",       0 },
+    { TON_MSG_FILE_DATA_CHUNK,         "*",      0 },
+    { TON_MSG_FILE_DATA_END,           "4s",     5 },
+    { TON_MSG_FILE_SET_END,            "",       0 },
+    { TON_MSG_SWITCH_ROLES,            "",       0 },
+    { TON_MSG_END_SESSION,             "",       0 }
 };
 #define msg_defs_length (sizeof(msg_defs) / sizeof(msg_defs[0]))
 
@@ -221,8 +221,7 @@ ton_msg_decode(struct ton_msg *msg, struct ton_decoded_msg *decoded) {
     int body_length = int32_ntoh(msg->data, 4);
     struct ton_msg_def *def;
     void *body;
-    char *str;
-    int str_offset = 0;
+    char *str_end;
 
     decoded->tag = tag;
     def = bsearch(&tag, msg_defs, msg_defs_length, sizeof(msg_defs[0]), msg_defs_tag_cmp);
@@ -238,15 +237,33 @@ ton_msg_decode(struct ton_msg *msg, struct ton_decoded_msg *decoded) {
     body = msg->data + TON_MSG_HEADER_SIZE;
 
     decoded->tag = tag;
-    str = NULL;
     switch (tag) {
         case TON_MSG_FILE_METADATA:
             decoded->u.metadata.size = int64_ntoh(body, 0);
             decoded->u.metadata.mtime = int64_ntoh(body, 8);
             decoded->u.metadata.mode = int32_ntoh(body, 16);
+
+            /* Up to 2 string arguments follow: filename and symlink target. */
             decoded->u.metadata.name = (char *) body + 20;
-            str = decoded->u.metadata.name;
-            str_offset = 20;
+            str_end = memchr(decoded->u.metadata.name, '\0', body_length - 20);
+            if (str_end == NULL) {
+                goto badstring;
+            }
+            if (str_end + 1 >= (char *) body + body_length) {
+                /* Second string is the symlink target. If the message ends
+                 * here and there is no second string, point symlink_target to
+                 * the terminating null of the first string, thus defaulting it
+                 * to the empty string. */
+                decoded->u.metadata.symlink_target = str_end;
+            }
+            else {
+                /* Ensure the second string has a terminating null within the
+                 * message body. */
+                decoded->u.metadata.symlink_target = str_end + 1;
+                if (memchr(decoded->u.metadata.symlink_target, '\0', body_length - (decoded->u.metadata.symlink_target - (char *) body)) == NULL) {
+                    goto badstring;
+                }
+            }
             break;
 
         case TON_MSG_FILE_METADATA_SUMMARY:
@@ -259,7 +276,9 @@ ton_msg_decode(struct ton_msg *msg, struct ton_decoded_msg *decoded) {
         case TON_MSG_FILE_DATA_END:
             decoded->u.err.code = int32_ntoh(body, 0);
             decoded->u.err.message = (char *) body + 4;
-            str_offset = 4;
+            if (memchr(decoded->u.err.message, '\0', body_length - 4) == NULL) {
+                goto badstring;
+            }
             break;
 
         case TON_MSG_FILE_DATA_CHUNK:
@@ -268,17 +287,11 @@ ton_msg_decode(struct ton_msg *msg, struct ton_decoded_msg *decoded) {
             break;
     }
 
-    /* If there's a string, make sure it is NUL-terminated and the NUL is
-     * inside the message body. */
-    if (str) {
-        char *str_end = memchr(str, '\0', body_length - str_offset);
-        if (str_end == NULL) {
-            ton_error(0, 0, "message with tag %d is invalid because body length is %d but string is not NUL-terminated early enough.", tag, body_length);
-            return TON_ERR_PROTOCOL;
-        }
-    }
-
     return 0;
+
+badstring:
+    ton_error(0, 0, "message with tag %d is invalid because body length is %d but string is not NUL-terminated early enough.", tag, body_length);
+    return TON_ERR_PROTOCOL;
 }
 
 #undef msg_defs_length
