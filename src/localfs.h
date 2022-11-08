@@ -178,9 +178,6 @@ ton_utime(const TON_LF_CHAR *path, TON_UTIMBUF *timbuf);
 int
 ton_access(const TON_LF_CHAR *path, int mode);
 
-TON_LF_CHAR *
-ton_realpath(const TON_LF_CHAR *path);
-
 /* Return a pointer to the basename part of the given path. */
 const TON_LF_CHAR *
 ton_lf_basename(const TON_LF_CHAR *path);

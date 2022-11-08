@@ -324,15 +324,6 @@ ton_access(const TON_LF_CHAR *path, int mode) {
 #endif
 }
 
-TON_LF_CHAR *
-ton_realpath(const TON_LF_CHAR *path) {
-#ifdef LOCAL_FILENAME_IS_WCHAR
-    return _wfullpath(NULL, path, 0);
-#else
-    return realpath(path, NULL);
-#endif
-}
-
 const TON_LF_CHAR *
 ton_lf_basename(const TON_LF_CHAR *path) {
     const TON_LF_CHAR *bn = path + ton_lf_len(path);
