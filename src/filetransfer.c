@@ -175,6 +175,41 @@ ton_dir_walk_aux(TON_LF_CHAR *path, int orig_path_start,
     return ret;
 }
 
+static TON_LF_CHAR *
+alloc_real_path_name(const TON_LF_CHAR *path) {
+    TON_LF_CHAR *real_path_name;
+    size_t len;
+
+    real_path_name = ton_dedotify_path(path);
+    if (real_path_name == NULL)
+        return NULL;
+
+    /* Remove any trailing directory separators, because Windows doesn't like
+     * it when you try to stat "c:\foo\bar\" - it prefers "c:\foo\bar".
+     *
+     * On Linux, don't remove the first character from the string, so that
+     * if all we have is "/", we keep that.
+     *
+     * On Windows, don't remove a backslash if it immediately follows a colon,
+     * so if we have "D:\", we want to keep it as "D:\" (the root directory
+     * of the D drive) not "D:" (our current directory on the D drive).
+     *
+     * We don't have to deal with the case where we have a drive letter and a
+     * relative path ("D:my\relative\path") because _fullpath() above has
+     * given us an absolute path.
+     */
+    len = ton_lf_len(real_path_name);
+    while (len > 1 && real_path_name[len - 1] == DIR_SEP) {
+#ifdef WINDOWS
+        if (real_path_name[len - 2] == ':')
+            break;
+#endif
+        real_path_name[--len] = '\0';
+    }
+    return real_path_name;
+}
+
+
 /* Recursively search the directory named in "path", calling callback for each
  * file found. If "path" is a file not a directory, we just call callback once
  * for that file.
@@ -209,25 +244,38 @@ ton_dir_walk(TON_LF_CHAR *path,
             TON_STAT *st, int orig_path_start),
         void *cookie) {
     int pos;
+    int rc;
+    TON_LF_CHAR *full_path;
 
-    /* If path is a file, point orig_path_start to the start of the file's
+    /* Do not resolve symlinks but make the path absolute and resolve any
+     * "." or ".." directory components. */
+    full_path = alloc_real_path_name(path);
+    if (full_path == NULL) {
+        ton_error(0, errno, "failed to resolve path: %s", path);
+        return -1;
+    }
+
+    /* If full_path is a file, point orig_path_start to the start of the file's
      * basename.
-     * If path is "/", orig_path_start is 1.
-     * If path is a directory, point orig_path_start to the start of the
+     * If full_path is "/", orig_path_start is 1.
+     * If full_path is a directory, point orig_path_start to the start of the
      * last directory component of the path. */
-    pos = ton_lf_len(path);
+    pos = ton_lf_len(full_path);
     if (pos > 0)
         --pos;
 
     /* Find the last directory separator, and we want to point to the character
      * after it. */
-    while (pos > 0 && path[pos] != DIR_SEP)
+    while (pos > 0 && full_path[pos] != DIR_SEP)
         pos--;
 
-    if (path[pos] == DIR_SEP)
+    if (full_path[pos] == DIR_SEP)
         pos++;
 
-    return ton_dir_walk_aux(path, pos, callback, cookie);
+    rc = ton_dir_walk_aux(full_path, pos, callback, cookie);
+
+    free(full_path);
+    return rc;
 }
 
 /*

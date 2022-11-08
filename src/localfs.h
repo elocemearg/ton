@@ -182,6 +182,12 @@ ton_access(const TON_LF_CHAR *path, int mode);
 const TON_LF_CHAR *
 ton_lf_basename(const TON_LF_CHAR *path);
 
+/* Canonicalize path by shortening any run of more than one directory separator
+ * to a single directory separator, then removing and resolving any "." or ".."
+ * components in the path. However, this does not follow symbolic links. */
+TON_LF_CHAR *
+ton_dedotify_path(const TON_LF_CHAR *path);
+
 #ifndef WINDOWS
 /* Return the target of the given symlink. It is the caller's responsibility to
  * free the return value. On error, NULL is returned. */

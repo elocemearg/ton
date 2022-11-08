@@ -337,6 +337,154 @@ ton_lf_basename(const TON_LF_CHAR *path) {
 }
 
 #ifndef WINDOWS
+static TON_LF_CHAR *
+ton_getcwd(void) {
+    size_t cwd_size = 100;
+    char *cwd = malloc(cwd_size);
+    char *ret;
+    do {
+        ret = getcwd(cwd, cwd_size);
+        if (ret == NULL) {
+            if (errno == ERANGE) {
+                char *new_cwd = realloc(cwd, cwd_size * 2);
+                if (new_cwd == NULL) {
+                    free(cwd);
+                    return NULL;
+                }
+                cwd = new_cwd;
+                cwd_size *= 2;
+            }
+            else {
+                free(cwd);
+                return NULL;
+            }
+        }
+    } while (ret == NULL);
+    return cwd;
+}
+#endif
+
+TON_LF_CHAR *
+ton_dedotify_path(const TON_LF_CHAR *path) {
+#ifdef WINDOWS
+    /* On Windows just use _wfullpath() - we don't care about resolving
+     * symlinks because we're going to stick our fingers in our ears and
+     * pretend there aren't any. */
+    return _wfullpath(NULL, path, 0);
+#else
+    TON_LF_CHAR *ret = NULL;
+    int r, w, len, skip_components;
+
+    if (path[0] != DIR_SEP) {
+        /* If the path is not absolute, make it absolute. */
+        TON_LF_CHAR *cwd = ton_getcwd();
+        if (cwd == NULL) {
+            goto nomem;
+        }
+        ret = malloc(ton_lf_len(path) + ton_lf_len(cwd) + 2);
+        if (ret == NULL) {
+            free(cwd);
+            goto nomem;
+        }
+        sprintf(ret, "%s/%s", cwd, path);
+    }
+    else {
+        /* Make a copy of path and put it in ret. */
+        ret = malloc(ton_lf_len(path) + 1);
+        if (ret == NULL) {
+            goto nomem;
+        }
+        strcpy(ret, path);
+    }
+
+    /* We do the following transformations:
+     * Any two or more consecutive DIR_SEP characters get shrunk into one.
+     * Any directory component named "." is removed.
+     * Any directory component named ".." is removed, and we also remove the
+     * previous component. So "/foo/bar/../baz" becomes "/foo/baz".
+     *
+     * Each transformation can only make the string shorter, not longer. */
+
+    /* Rewrite the string in place, but not writing a DIR_SEP character if
+     * that's the last character we wrote. */
+    w = 0;
+    for (r = 0; ret[r]; r++) {
+        if (ret[r] != DIR_SEP || w == 0 || ret[w - 1] != DIR_SEP) {
+            ret[w++] = ret[r];
+        }
+    }
+    ret[w] = '\0';
+
+    /* Remove "." components. Note that we made the path absolute so the
+     * path will never begin with a dot. */
+    w = 0;
+    for (r = 0; ret[r]; r++) {
+        if (ret[r] == DIR_SEP && ret[r + 1] == '.' && (ret[r + 2] == DIR_SEP || ret[r + 2] == '\0')) {
+            /* Skip this directory component. Increment r to point to the dot,
+             * then the for loop increment will point it to the next DIR_SEP,
+             * which we'll copy. */
+            r++;
+        }
+        else {
+            ret[w++] = ret[r];
+        }
+    }
+
+    /* The above can result in the leading slash getting removed, if for
+     * example we have "/." - we want "/" not "". */
+    if (r > 0 && w == 0)
+        ret[w++] = DIR_SEP;
+    ret[w] = '\0';
+
+    /* Remove ".." components. We do this by working backwards from the end.
+     * If we see a ".." component, we put NULs over it and increase the count
+     * of non-.. components before it that we have to skip. */
+    len = strlen(ret);
+    skip_components = 0;
+    w = len;
+    while (w > 0) {
+        /* ret[w] points to the character after a directory component */
+        if (w >= 2 && ret[w - 1] == '.' && ret[w - 2] == '.' &&
+                (w == 2 || ret[w - 3] == DIR_SEP)) {
+            skip_components++;
+            w -= 2;
+            memset(&ret[w], '\0', 3);
+            w--;
+        }
+        else {
+            /* w points to a directory separator or end of string */
+            int comp_start;
+            for (comp_start = w - 1; comp_start >= 0 && ret[comp_start] != DIR_SEP; comp_start--);
+            comp_start++;
+            if (skip_components > 0) {
+                memset(&ret[comp_start], '\0', 1 + w - comp_start);
+                skip_components--;
+            }
+            w = comp_start;
+            if (w > 0)
+                w--;
+        }
+    }
+
+    /* Now remove all '\0' characters from the string, of which we know the
+     * real length. */
+    r = 0;
+    w = 0;
+    for (r = 0; r < len; r++) {
+        if (ret[r] != '\0')
+            ret[w++] = ret[r];
+    }
+    ret[w] = '\0';
+
+    return ret;
+
+nomem:
+    free(ret);
+    return NULL;
+#endif
+}
+
+#ifndef WINDOWS
 char *
 ton_get_symlink_target(TON_LF_CHAR *symlink_path) {
     char *target = NULL;
@@ -616,6 +764,46 @@ ton_lf_from_locale(const char *filename) {
 #include <CUnit/CUnit.h>
 
 static void
+test_ton_dedotify_path(void) {
+#ifndef LOCAL_FILENAME_IS_WCHAR
+    struct {
+        char *path;
+        char *expected;
+    } tests[] = {
+        { "/foo/bar/baz/", "/foo/bar/baz/" },
+        { "/foo/./bar/./baz", "/foo/bar/baz" },
+        { "/foo/././././/////bar///baz", "/foo/bar/baz" },
+        { "/foo/bar/baz/.", "/foo/bar/baz" },
+        { "/.", "/" },
+        { "///.///", "/" },
+        { "/foo/bar/../baz", "/foo/baz" },
+        { "/one/two/../three/four/../five/../..", "/one/" },
+        { "/one/two/../../../", "/" },
+        { "/one/two/three/.././../four/five/six/seven/.././..", "/one/four/five/" },
+        { "/..", "/" },
+        { "/../", "/" },
+        { "/one/../two/../three/../four/five/six", "/four/five/six" },
+        { "/one/two/three/four/five/six/seven/eight/../nine/./ten/../../../../../", "/one/two/three/four/" },
+        { "/one/two/three/four//../five/six/../../..//myfile.txt", "/one/two/myfile.txt" },
+    };
+
+    for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+        char *input_path = tests[i].path;
+        char *expected = tests[i].expected;
+        char *observed;
+
+        observed = ton_dedotify_path(input_path);
+        if (strcmp(observed, expected)) {
+            fprintf(stderr, "test_ton_dedotify_path(): input path \"%s\", expected \"%s\", observed \"%s\"\n",
+                    input_path, expected, observed);
+            CU_FAIL("output not as expected");
+        }
+        free(observed);
+    }
+#endif
+}
+
+static void
 test_ton_lf_from_utf8(void) {
 #ifdef LOCAL_FILENAME_IS_WCHAR
     struct {
@@ -697,6 +885,7 @@ ton_localfs_register_tests(void) {
     CU_TestInfo tests[] = {
         { "ton_lf_from_utf8", test_ton_lf_from_utf8 },
         { "ton_lf_to_utf8", test_ton_lf_to_utf8 },
+        { "ton_dedotify_path", test_ton_dedotify_path },
         CU_TEST_INFO_NULL
     };
 
