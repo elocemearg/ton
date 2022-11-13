@@ -15,7 +15,7 @@
 #define TON_GIT_COMMIT_HASH "unknown"
 #endif
 
-#define TON_VERSION_STRING "1.0.0"
+#define TON_VERSION_STRING "1.0.1"
 
 /* Resource: licence.txt */
 extern const char _binary_licence_txt_start[];
